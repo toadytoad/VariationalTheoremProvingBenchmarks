@@ -80,3 +80,15 @@ def truthTableToBooleanExpression(table: TruthTable):
 table = TruthTable(6, None)
 table.populateTable(0.8)
 print(truthTableToBooleanExpression(table))
+
+# Feels like sympy isn't good enough, it's just doing simple SOP simplification like a kmap
+# Create a backend to a more advanced software to create even smaller expressions? Espresso??
+# another option is to generate the expressions before the truth table using random tree algorithms.
+# Random generation would be as follows:
+# Input: variables and random settings
+# The trees nodes can take on one of the 5 operations: not, and, or, equivalent (xnor), implies
+# Start with a root node, assign to it one of the operations that are not not.
+# Give that node two children. For every subsequent depth the chance for the next node to be an operation decreases, and
+# the probability of it being a leaf node increases
+# Not nodes only have one child.
+# Give leaf nodes the possibility of being a negation of a variable too.
