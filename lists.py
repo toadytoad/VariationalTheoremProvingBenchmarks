@@ -39,6 +39,8 @@ class TruthTable:
 
     def __len__(self):
         return 1 << self.n
+    def __repr__(self):
+        return repr(self.table)
 
 
 # really just a tuple with the ability to access the truth of the item given a configuration
@@ -133,10 +135,12 @@ def generateVariationalList(listSize: int, listDistribution: Callable[[], int], 
 
 
 if __name__ == "__main__":
-    testCase = generateVariationalList(8, lambda: random.randint(1, 5), 2, lambda: 0.3)
+
+    testCase = generateVariationalList(8, lambda: random.randint(1, 5), 3, lambda: 0.3)
     print(testCase)
-    fmTruth = TruthTable(2, None)
-    fmTruth.populateTable(1)
+    fmTruth = TruthTable(3, None)
+    fmTruth.populateTable(0.5)
+    print(fmTruth)
     fm = FeatureModel(fmTruth)
     productLine = fm.applyModelToList(testCase)
     print(productLine)

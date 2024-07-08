@@ -4,6 +4,10 @@ import itertools
 
 from bitarray import bitarray
 
+from lists import TruthTable
+from sympy import *
+from string import ascii_lowercase
+
 
 def serializeTestCase(lst, file):
     with open(file, "wb") as f:
@@ -40,6 +44,7 @@ def solveNoDupWithTruthTable(lst):
         # is provable for all variations
     return ba
 
+
 # For creating boolean expressions out of truth tables:
 # Define several z3 boolean references which are enumerated and properly assigned to each bit of the truth table index.
 # Using the variables create a z3 CNF and apply z3's simplify function on it.
@@ -51,3 +56,27 @@ def solveNoDupWithTruthTable(lst):
 # expr = (~a&~b&~c)|(~a&b&c)|(a&~b&c)|(a&b&~c)|(a&b&c)
 # simplify_logic(expr)
 # (a & b) | (a & c) | (b & c) | (~a & ~b & ~c)
+
+def truthTableToBooleanExpression(table: TruthTable):
+    n = table.n
+    s = symbols(' '.join(list(ascii_lowercase[:n])))
+    expr = false
+    for i in range(1 << n):
+        if table[i] == 0:
+            continue
+
+        subExpr = True
+        for j in range(n):
+            if i & 1:
+                subExpr &= s[j]
+            else:
+                subExpr &= ~s[j]
+            i >>= 1
+        expr |= subExpr
+    print(expr)
+    return simplify_logic(expr)
+
+
+table = TruthTable(6, None)
+table.populateTable(0.8)
+print(truthTableToBooleanExpression(table))
