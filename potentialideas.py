@@ -39,3 +39,15 @@ def solveNoDupWithTruthTable(lst):
         # two now give a 0. This takes a little refactoring but is not too hard, and creates a variational problem which
         # is provable for all variations
     return ba
+
+# For creating boolean expressions out of truth tables:
+# Define several z3 boolean references which are enumerated and properly assigned to each bit of the truth table index.
+# Using the variables create a z3 CNF and apply z3's simplify function on it.
+# Ok further research and testing shows z3 is terrible for this
+# Instead use sympy
+# e.g
+#
+# a, b, c =symbols('a b c')
+# expr = (~a&~b&~c)|(~a&b&c)|(a&~b&c)|(a&b&~c)|(a&b&c)
+# simplify_logic(expr)
+# (a & b) | (a & c) | (b & c) | (~a & ~b & ~c)
