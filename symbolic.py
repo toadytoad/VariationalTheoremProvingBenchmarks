@@ -53,7 +53,24 @@ class Expression:
     def __str__(self):
         return repr(self)
 
+    def __or__(self, other):
+        assert self.scope == other.scope
+        return Expression(Operation.OR, [self, other], self.scope)
 
+    def __and__(self, other):
+        assert self.scope == other.scope
+        return Expression(Operation.AND, [self, other], self.scope)
+
+    def __invert__(self):
+        return Expression(Operation.NOT, [self], self.scope)
+
+    def __eq__(self, other):
+        assert self.scope == other.scope
+        return Expression(Operation.EQUALS, [self, other], self.scope)
+
+    def __ge__(self, other):
+        assert self.scope == other.scope
+        return Expression(Operation.IMPLIES, [self, other], self.scope)
 class WeightsCollection:
     def __init__(self, weights):
         self.weights = weights
