@@ -6,7 +6,7 @@ import sympy
 
 
 class Scope:
-    def __init__(self, v):
+    def __init__(self, v: List[sympy.Symbol]):
         self.variables = v
         self.inverse = {v[i]: i for i in range(len(v))}
 
@@ -27,6 +27,7 @@ class Operation(Enum):
 
 
 operationStrs = [None, "~", "&", "|", "=>", "=="]
+operationFuncs = [None, lambda x: ~x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: ~x | y, lambda x, y: x == y]
 
 
 class Expression:
@@ -48,38 +49,40 @@ class Expression:
         elif self.op == Operation.NOT:
             return "(~" + str(self.children[0]) + ")"
         else:
-            return "(" + str(self.children[0]) + operationStrs[self.op] + str(self.children[1]) + ")"
+            return "(" + str(self.children[0]) + operationStrs[self.op.value] + str(self.children[1]) + ")"
 
     def __str__(self):
         return repr(self)
 
-    def __or__(self, other):
+    def __or__(self, other:"Expression"):
         assert self.scope == other.scope
         return Expression(Operation.OR, [self, other], self.scope)
 
-    def __and__(self, other):
+    def __and__(self, other:"Expression"):
         assert self.scope == other.scope
         return Expression(Operation.AND, [self, other], self.scope)
 
     def __invert__(self):
         return Expression(Operation.NOT, [self], self.scope)
 
-    def __eq__(self, other):
+    def __eq__(self, other:"Expression"):
         assert self.scope == other.scope
         return Expression(Operation.EQUALS, [self, other], self.scope)
 
-    def __ge__(self, other):
+    def __ge__(self, other:"Expression"):
         assert self.scope == other.scope
         return Expression(Operation.IMPLIES, [self, other], self.scope)
+
+
 class WeightsCollection:
-    def __init__(self, weights):
+    def __init__(self, weights:List[Tuple[float, object]]):
         self.weights = weights
         self.sum = sum(weights[i][0] for i in range(len(weights)))
         self.psa = [weights[0][0]]
         for i in range(1, len(self.weights)):
             self.psa.append(self.psa[-1] + self.weights[i][0])
 
-    def __getitem__(self, rand: random.Random):
+    def __getitem__(self, rand: random.Random) -> object:
         val = rand.random() * self.sum
         for i in range(len(self.weights)):
             if val < self.psa[i]:
@@ -104,7 +107,7 @@ class RandomExpressionFactory:
         self.rand = rand
         self.scope = scope
 
-    def newExpression(self, depth=0):
+    def newExpression(self, depth=0) -> Expression:
         weight = self.weights[depth]
         op = weight[self.rand]
         if op == Operation.SYMBOL:
@@ -113,3 +116,14 @@ class RandomExpressionFactory:
             return Expression(op, [self.newExpression(depth + 1)], self.scope)
         else:
             return Expression(op, [self.newExpression(depth + 1), self.newExpression(depth + 1)], self.scope)
+
+
+if __name__ == '__main__':
+    rand = random.Random()
+    scope = Scope(list(sympy.symbols("a b c d e")))
+    print(scope)
+    vw = VariableWeights([(lambda x: 2 * x, Operation.SYMBOL), (lambda x: max(1, 5 - x), Operation.EQUALS),
+                          (lambda x: max(1, 5 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
+                          (lambda x: max(1, 5 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
+    factory = RandomExpressionFactory(vw, rand, scope)
+    print(factory.newExpression())
