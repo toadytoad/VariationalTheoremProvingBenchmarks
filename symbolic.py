@@ -1,6 +1,6 @@
 import random
 from enum import Enum
-from typing import Callable, List, Tuple
+from typing import Callable, List, Tuple, Dict
 
 import sympy
 
@@ -17,6 +17,16 @@ class Scope:
         return "Symbolic Scope with the following variables:\n" + str(self.variables)
 
 
+class Substitution:
+    def __init__(self, sub: Dict[sympy.Symbol, bool], scope: Scope):
+        for i in sub:
+            assert i in scope.variables
+        assert len(sub) == len(scope.variables)
+        self.scope = scope
+        self.sub = sub
+    def __repr__(self):
+        return "Substitution:\n" + str(self.sub)
+
 class Operation(Enum):
     SYMBOL = 0
     NOT = 1
@@ -27,7 +37,7 @@ class Operation(Enum):
 
 
 operationStrs = [None, "~", "&", "|", "=>", "=="]
-operationFuncs = [None, lambda x: ~x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: ~x | y, lambda x, y: x == y]
+operationFuncs = [None, lambda x: not x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: (not x) | y, lambda x, y: x == y]
 
 
 class Expression:
@@ -51,31 +61,38 @@ class Expression:
         else:
             return "(" + str(self.children[0]) + operationStrs[self.op.value] + str(self.children[1]) + ")"
 
+    def applySubstitution(self, substitution: Substitution):
+        if self.op == Operation.SYMBOL:
+            return substitution.sub[self.children[0]]
+        return operationFuncs[self.op.value](*map(lambda x: x.applySubstitution(substitution), self.children))
+        # kinda unsafe in terms of arguments, but it should
+        # be fine because of the assertions in __init__
+
     def __str__(self):
         return repr(self)
 
-    def __or__(self, other:"Expression"):
+    def __or__(self, other: "Expression"):
         assert self.scope == other.scope
         return Expression(Operation.OR, [self, other], self.scope)
 
-    def __and__(self, other:"Expression"):
+    def __and__(self, other: "Expression"):
         assert self.scope == other.scope
         return Expression(Operation.AND, [self, other], self.scope)
 
     def __invert__(self):
         return Expression(Operation.NOT, [self], self.scope)
 
-    def __eq__(self, other:"Expression"):
+    def __eq__(self, other: "Expression"):
         assert self.scope == other.scope
         return Expression(Operation.EQUALS, [self, other], self.scope)
 
-    def __ge__(self, other:"Expression"):
+    def __ge__(self, other: "Expression"):
         assert self.scope == other.scope
         return Expression(Operation.IMPLIES, [self, other], self.scope)
 
 
 class WeightsCollection:
-    def __init__(self, weights:List[Tuple[float, object]]):
+    def __init__(self, weights: List[Tuple[float, object]]):
         self.weights = weights
         self.sum = sum(weights[i][0] for i in range(len(weights)))
         self.psa = [weights[0][0]]
@@ -126,4 +143,8 @@ if __name__ == '__main__':
                           (lambda x: max(1, 5 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
                           (lambda x: max(1, 5 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
     factory = RandomExpressionFactory(vw, rand, scope)
-    print(factory.newExpression())
+    expr = factory.newExpression()
+    print(expr)
+    sub = Substitution(dict([(i, bool(random.getrandbits(1))) for i in scope.variables]), scope)
+    print(sub)
+    print(expr.applySubstitution(sub))
