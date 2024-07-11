@@ -2,8 +2,11 @@ import itertools
 from collections.abc import Callable
 from typing import *
 
+import sympy
 from bitarray import *
 import random
+
+from symbolic import Expression, Scope, RandomExpressionFactory, VariableWeights, Operation
 
 
 # "configurations" here are just bitmask representations of the truth of variables. e.g. bit 0 could correspond to "A".
@@ -46,15 +49,16 @@ class TruthTable:
 # really just a tuple with the ability to access the truth of the item given a configuration
 
 class VariationalElement:
-    def __init__(self, val: int, variation: TruthTable):
+    def __init__(self, val: int, variation: Expression):
         self.val = val
         self.var = variation
+        self.table = variation.getTruthTable()
 
     def __getitem__(self, ind):
-        return self.var[ind]
+        return self.table[ind]
 
     def __repr__(self):
-        return str(self.val) + ", " + str(self.var.table)
+        return "("+str(self.val) + ", " + repr(self.var)+")"
 
 
 class VariationalList:
@@ -62,18 +66,19 @@ class VariationalList:
         self.lst = lst
 
     def __getitem__(self, ind):
-        return tuple([i.val for i in self.lst if i[ind]])
+        return tuple([i.val for i in self.lst if i.table[ind]])
 
     def __repr__(self):
         return repr(self.lst)
 
 
 class FeatureModel:
-    def __init__(self, table: TruthTable):
-        self.table = table
+    def __init__(self, expr:Expression):
+        self.table = expr.getTruthTable()
+        self.expr = expr
         self.configurations = []
         for i in range(len(self.table)):
-            if table.table[i] == 1:
+            if self.table[i] == 1:
                 self.configurations.append(i)
 
     def applyModelToList(self, lst: VariationalList):
@@ -86,7 +91,7 @@ class FeatureModel:
         return ProductLine(self, data, lst)
 
     def __repr__(self):
-        return repr(self.table)
+        return repr(self.expr)
 
 
 class ProductLine:
@@ -120,14 +125,12 @@ class ProductLine:
         return "Product Line over " + repr(self.lst) + " and data " + repr(self.data)
 
 
-def generateVariationalList(listSize: int, listDistribution: Callable[[], int], nVars: int,
-                            percentTruthDistribution: Callable[[], float]):
+def generateVariationalList(listSize: int, listDistribution: Callable[[], int], factory:RandomExpressionFactory):
     lst = []
     for i in range(listSize):
         # make the necessary calls to the random distributions, and generate a list.
-        table = TruthTable(nVars, None)
-        table.populateTable(percentTruthDistribution())
-        lst.append(VariationalElement(listDistribution(), table))
+        expr = factory.newExpression()
+        lst.append(VariationalElement(listDistribution(), expr))
     return VariationalList(lst)
 
 
@@ -135,11 +138,15 @@ def generateVariationalList(listSize: int, listDistribution: Callable[[], int], 
 
 
 if __name__ == "__main__":
-
-    testCase = generateVariationalList(8, lambda: random.randint(1, 5), 3, lambda: 0.3)
+    scope = Scope(list(sympy.symbols("a b c d e")))
+    vw = VariableWeights([(lambda x: 2 * x, Operation.SYMBOL), (lambda x: max(1, 5 - x), Operation.EQUALS),
+                          (lambda x: max(1, 5 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
+                          (lambda x: max(1, 5 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
+    rand = random.Random()
+    factory = RandomExpressionFactory(vw, rand, scope)
+    testCase = generateVariationalList(8, lambda: random.randint(1, 5), factory)
     print(testCase)
-    fmTruth = TruthTable(3, None)
-    fmTruth.populateTable(0.5)
+    fmTruth = factory.newExpression()
     print(fmTruth)
     fm = FeatureModel(fmTruth)
     productLine = fm.applyModelToList(testCase)

@@ -3,12 +3,20 @@ from enum import Enum
 from typing import Callable, List, Tuple, Dict
 
 import sympy
+from bitarray import bitarray
 
 
 class Scope:
     def __init__(self, v: List[sympy.Symbol]):
         self.variables = v
         self.inverse = {v[i]: i for i in range(len(v))}
+        self.truthTables = []
+        for i in range(len(v)):
+            tt = bitarray(1 << len(v))
+            for j in range(1 << len(v)):
+                if j & (1 << i):
+                    tt[j] = 1
+            self.truthTables.append(tt)
 
     def __len__(self):
         return len(self.variables)
@@ -24,8 +32,10 @@ class Substitution:
         assert len(sub) == len(scope.variables)
         self.scope = scope
         self.sub = sub
+
     def __repr__(self):
         return "Substitution:\n" + str(self.sub)
+
 
 class Operation(Enum):
     SYMBOL = 0
@@ -37,7 +47,10 @@ class Operation(Enum):
 
 
 operationStrs = [None, "~", "&", "|", "=>", "=="]
-operationFuncs = [None, lambda x: not x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: (not x) | y, lambda x, y: x == y]
+operationFuncs = [None, lambda x: not x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: (not x) | y,
+                  lambda x, y: x == y]
+truthTableFuncs = [None, lambda x: ~x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: ~x | y,
+                   lambda x, y: ~(x ^ y)]
 
 
 class Expression:
@@ -67,6 +80,11 @@ class Expression:
         return operationFuncs[self.op.value](*map(lambda x: x.applySubstitution(substitution), self.children))
         # kinda unsafe in terms of arguments, but it should
         # be fine because of the assertions in __init__
+
+    def getTruthTable(self):
+        if self.op == Operation.SYMBOL:
+            return self.scope.truthTables[self.scope.inverse[self.children[0]]]
+        return truthTableFuncs[self.op.value](*map(lambda x: x.getTruthTable(), self.children))
 
     def __str__(self):
         return repr(self)
@@ -148,3 +166,4 @@ if __name__ == '__main__':
     sub = Substitution(dict([(i, bool(random.getrandbits(1))) for i in scope.variables]), scope)
     print(sub)
     print(expr.applySubstitution(sub))
+    print(expr.getTruthTable())
