@@ -138,13 +138,13 @@ def generateVariationalList(listSize: int, listDistribution: Callable[[], int], 
 
 
 if __name__ == "__main__":
-    scope = Scope(list(sympy.symbols("a b c d e")))
-    vw = VariableWeights([(lambda x: 2 * x, Operation.SYMBOL), (lambda x: max(1, 5 - x), Operation.EQUALS),
-                          (lambda x: max(1, 5 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
-                          (lambda x: max(1, 5 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
+    scope = Scope(list(sympy.symbols("a b c")))
+    vw = VariableWeights([(lambda x: 4 * x, Operation.SYMBOL), (lambda x: max(1, 2 - x), Operation.EQUALS),
+                          (lambda x: max(1, 2 - x), Operation.IMPLIES), (lambda x: 1.5*max(1, 2 - x), Operation.OR),
+                          (lambda x: 1.5*max(1, 2 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
     rand = random.Random()
     factory = RandomExpressionFactory(vw, rand, scope)
-    testCase = generateVariationalList(8, lambda: random.randint(1, 5), factory)
+    testCase = generateVariationalList(8, lambda: random.randint(1, 4), factory)
     print(testCase)
     fmTruth = factory.newExpression()
     print(fmTruth)
