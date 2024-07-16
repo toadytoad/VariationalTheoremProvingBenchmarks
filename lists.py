@@ -1,12 +1,10 @@
-import itertools
-from collections.abc import Callable
 from typing import *
 
 import sympy
 from bitarray import *
 import random
 
-from symbolic import Expression, Scope, RandomExpressionFactory, VariableWeights, Operation
+from symbolic import Expression, Scope, RandomExpressionFactory, VariableWeights, Operation, SymbolWeights
 
 
 # "configurations" here are just bitmask representations of the truth of variables. e.g. bit 0 could correspond to "A".
@@ -42,6 +40,7 @@ class TruthTable:
 
     def __len__(self):
         return 1 << self.n
+
     def __repr__(self):
         return repr(self.table)
 
@@ -58,9 +57,12 @@ class VariationalElement:
         return self.table[ind]
 
     def __repr__(self):
-        return "("+str(self.val) + ", " + repr(self.var)+")"
-    def deg(self, fm:"FeatureModel"):
-        return sum(self.table[i] for i in fm.configurations)/len(fm)
+        return "(" + str(self.val) + ", " + repr(self.var) + ")"
+
+    def deg(self, fm: "FeatureModel"):
+        if len(fm) == 0:
+            return 0
+        return sum(self.table[i] for i in fm.configurations) / len(fm)
 
 
 class VariationalList:
@@ -81,7 +83,7 @@ class VariationalList:
 
 
 class FeatureModel:
-    def __init__(self, expr:Expression):
+    def __init__(self, expr: Expression):
         self.table = expr.getTruthTable()
         self.expr = expr
         self.configurations = []
@@ -134,7 +136,10 @@ class ProductLine:
 
     def __repr__(self):
         return "Product Line over " + repr(self.lst) + " and data " + repr(self.data)
+
     def getAverageLength(self):
+        if len(self.data) == 0:
+            return 0
         return sum(map(len, self.data)) / len(self.data)
 
     def getAverageWeight(self):
@@ -143,31 +148,38 @@ class ProductLine:
     def getWeights(self):
         return list(map(lambda x: x.deg(self.fm), self.lst))
 
-def generateVariationalList(listSize: int, listDistribution: Callable[[], int], factory:RandomExpressionFactory):
+
+def generateVariationalList(listSize: int, listDistribution: Callable[[], int], factory: RandomExpressionFactory):
     lst = []
     for i in range(listSize):
         # make the necessary calls to the random distributions, and generate a list.
-        expr = factory.newExpression()
+        expr = factory.newExpression(SymbolWeights(5, factory.scope))
         lst.append(VariationalElement(listDistribution(), expr))
     return VariationalList(lst)
 
 
-
-
-
 if __name__ == "__main__":
     scope = Scope(list(sympy.symbols("a b c d e")))
-    vw = VariableWeights([(lambda x: 2 * x, Operation.SYMBOL), (lambda x: max(1, 5 - x), Operation.EQUALS),
-                          (lambda x: max(1, 5 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
-                          (lambda x: max(1, 5 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
+    vw = VariableWeights([(lambda x: 5 * x, Operation.SYMBOL), (lambda x: max(1, 2 - x), Operation.EQUALS),
+                          (lambda x: max(1, 3 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
+                          (lambda x: max(1, 4 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
     rand = random.Random()
     factory = RandomExpressionFactory(vw, rand, scope)
     testCase = generateVariationalList(8, lambda: random.randint(1, 5), factory)
     print(testCase)
-    fmTruth = factory.newExpression()
+    symbolWeights = SymbolWeights(5, scope)
+    fmTruth = factory.newExpression(symbolWeights)
     print(fmTruth)
     fm = FeatureModel(fmTruth)
     productLine = fm.applyModelToList(testCase)
     print(productLine)
-    print(productLine.filterNoDuplicates())
-    print(productLine.filterSorted())
+    nodup = productLine.filterNoDuplicates()
+    srted = productLine.filterSorted()
+    print(nodup)
+    print(srted)
+    print(productLine.getAverageLength())
+    print(nodup.getAverageLength())
+    print(srted.getAverageLength())
+    print(productLine.getAverageWeight())
+    print(nodup.getAverageWeight())
+    print(srted.getAverageWeight())
