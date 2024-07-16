@@ -92,3 +92,4 @@ print(truthTableToBooleanExpression(table))
 # the probability of it being a leaf node increases
 # Not nodes only have one child.
 # Give leaf nodes the possibility of being a negation of a variable too.
+

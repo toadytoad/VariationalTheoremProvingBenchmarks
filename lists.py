@@ -59,6 +59,8 @@ class VariationalElement:
 
     def __repr__(self):
         return "("+str(self.val) + ", " + repr(self.var)+")"
+    def deg(self, fm:"FeatureModel"):
+        return sum(self.table[i] for i in fm.configurations)/len(fm)
 
 
 class VariationalList:
@@ -70,6 +72,12 @@ class VariationalList:
 
     def __repr__(self):
         return repr(self.lst)
+
+    def __len__(self):
+        return len(self.lst)
+
+    def __iter__(self):
+        return iter(self.lst)
 
 
 class FeatureModel:
@@ -92,6 +100,9 @@ class FeatureModel:
 
     def __repr__(self):
         return repr(self.expr)
+
+    def __len__(self):
+        return len(self.configurations)
 
 
 class ProductLine:
@@ -123,7 +134,14 @@ class ProductLine:
 
     def __repr__(self):
         return "Product Line over " + repr(self.lst) + " and data " + repr(self.data)
+    def getAverageLength(self):
+        return sum(map(len, self.data)) / len(self.data)
 
+    def getAverageWeight(self):
+        return sum(map(lambda x: x.deg(self.fm), self.lst)) / len(self.lst)
+
+    def getWeights(self):
+        return list(map(lambda x: x.deg(self.fm), self.lst))
 
 def generateVariationalList(listSize: int, listDistribution: Callable[[], int], factory:RandomExpressionFactory):
     lst = []
