@@ -1,8 +1,14 @@
 import random
+import string
 from enum import Enum
 from typing import Callable, List, Tuple, Dict
 
 import sympy
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+from matplotlib import cm
+import numpy as np
+from scipy.stats import gaussian_kde
 from bitarray import bitarray
 
 
@@ -135,6 +141,21 @@ class VariableWeights:
             self.cache[index] = WeightsCollection(weight)
         return self.cache[index]
 
+class SymbolWeights:
+    def __init__(self, factor: float, scope: Scope):
+        self.scope = scope
+        self.weights = [1]*len(self.scope)
+        self.f = factor
+    def __getitem__(self, rand: random.Random):
+        psa = [self.weights[0]]
+        for i in range(1, len(self.weights)):
+            psa.append(self.weights[i] + psa[-1])
+        val = rand.random() * psa[-1]
+        for i in range(len(self.weights)):
+            if val<psa[i]:
+                self.weights[i] /= self.f
+                return self.scope.variables[i]
+
 
 class RandomExpressionFactory:
     def __init__(self, weights: VariableWeights, rand: random.Random, scope: Scope):
@@ -142,28 +163,58 @@ class RandomExpressionFactory:
         self.rand = rand
         self.scope = scope
 
-    def newExpression(self, depth=0) -> Expression:
+    def newExpression(self, sw:SymbolWeights, depth=0) -> Expression:
         weight = self.weights[depth]
         op = weight[self.rand]
         if op == Operation.SYMBOL:
-            return Expression(op, [self.rand.choice(self.scope.variables)], self.scope)
+            negate = self.rand.getrandbits(1)
+            if negate:
+                return ~Expression(op, [sw[self.rand]], self.scope)
+            else:
+                return Expression(op, [sw[self.rand]], self.scope)
+
         elif op == Operation.NOT:
-            return Expression(op, [self.newExpression(depth + 1)], self.scope)
+            return Expression(op, [self.newExpression(sw, depth + 1)], self.scope)
         else:
-            return Expression(op, [self.newExpression(depth + 1), self.newExpression(depth + 1)], self.scope)
+            return Expression(op, [self.newExpression(sw, depth + 1), self.newExpression(sw, depth + 1)], self.scope)
 
-
+'''
+This variable weight expression seems to generate some decently nice data.
+vw = VariableWeights([(lambda x: 2*x, Operation.SYMBOL), (lambda x: i/(x+1), Operation.EQUALS),
+                              (lambda x: 0/(x*x+1), Operation.IMPLIES), (lambda x: (2*i)/(x+1)*(1/5 if x%2 else 5), Operation.OR),
+                              (lambda x: (8)/(x+1)*(5 if x%2 else 1/5), Operation.AND), (lambda x: 1/(x+1), Operation.NOT)])
+i can be varied between 1 and 20 to get a variety of different weight peaks in order to generate several different distributions.
+This can be used to generate the opposite sided list by negating the entire expression during generation (i.e swapping and and or to keep the same parity, and then making the NOT expression massive for x=0)
+You can then apply demorgans law if you wish to turn this expression into a different looking one if you wish.
+For some reason simply swapping and and or fails to generate the opposite sided distribution list.
+'''
 if __name__ == '__main__':
     rand = random.Random()
-    scope = Scope(list(sympy.symbols("a b c d e")))
-    print(scope)
-    vw = VariableWeights([(lambda x: 2 * x, Operation.SYMBOL), (lambda x: max(1, 5 - x), Operation.EQUALS),
-                          (lambda x: max(1, 5 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
-                          (lambda x: max(1, 5 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
-    factory = RandomExpressionFactory(vw, rand, scope)
-    expr = factory.newExpression()
+    start = 9
+    end = 10
+    plt.hsv()
+    scope = Scope(list(sympy.symbols(' '.join(string.ascii_uppercase[:8]))))
+    for i in range(start, end):
+
+        print(scope)
+        vw = VariableWeights([(lambda x: 2*x, Operation.SYMBOL), (lambda x: i/(x+1), Operation.EQUALS),
+                              (lambda x: 0/(x*x+1), Operation.IMPLIES), (lambda x: (2*i)/(x+1)*(1/5 if x%2 else 5), Operation.OR),
+                              (lambda x: (8)/(x+1)*(5 if x%2 else 1/5), Operation.AND), (lambda x: 1/(x+1), Operation.NOT)])
+        factory = RandomExpressionFactory(vw, rand, scope)
+        data = []
+        for j in range(10000):
+            symbolWeights = SymbolWeights(5, scope)
+            expr = factory.newExpression(symbolWeights)
+            tt = expr.getTruthTable()
+            data.append(tt.count(bitarray('1'))/(1<<8))
+        density = gaussian_kde(data)
+        xs = np.linspace(0, 1, 2000)
+        density.covariance_factor = lambda: .25
+        density._compute_covariance()
+
+        plt.plot(xs, density(xs), label=str(i))
+    expr = factory.newExpression(SymbolWeights(4, scope))
     print(expr)
-    sub = Substitution(dict([(i, bool(random.getrandbits(1))) for i in scope.variables]), scope)
-    print(sub)
-    print(expr.applySubstitution(sub))
-    print(expr.getTruthTable())
+    print(expr.getTruthTable().tobytes().hex())
+    plt.legend(loc='upper left')
+    plt.show()
