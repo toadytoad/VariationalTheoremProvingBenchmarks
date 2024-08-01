@@ -1,3 +1,4 @@
+import itertools
 import random
 import string
 import zlib
@@ -5,6 +6,7 @@ from enum import Enum
 from functools import reduce
 from typing import Callable, List, Tuple, Dict
 
+import pyapproxmc
 import sympy
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -120,6 +122,150 @@ class Expression:
         assert self.scope == other.scope
         return Expression(Operation.EQUALS, [self, other], self.scope)
 
+    def toCNF(self):
+        if self.op == Operation.SYMBOL:
+            return CNF([CNFTerm([Atom(self.children[0], False, self.scope)], self.scope)], self.scope)
+        elif self.op == Operation.NOT:
+            return ~self.children[0].toCNF()
+        elif self.op == Operation.AND:
+            start = self.children[0].toCNF()
+            for i in range(1, len(self.children)):
+                start &= self.children[i].toCNF()
+            return start
+        elif self.op == Operation.OR:
+            start = self.children[0].toCNF()
+            for i in range(1, len(self.children)):
+                start |= self.children[i].toCNF()
+            return start
+        else:
+            return NotImplementedError("Only Or, And, and Not are supported at this time.")
+
+
+# TODO to cnf form, create a cnf type that can be anded or ored with another cnf type to form another
+# For and, it's easy, just combine the terms together
+# For Or, distribute each term. CNF: List[CNFTerm], CNFTerm: List[Atom]
+
+class Atom:
+    def __init__(self, symbol: sympy.Symbol, negation: bool, scope: Scope):
+        assert symbol in scope.variables
+        self.symbol = symbol
+        self.negation = negation
+        self.scope = scope
+
+    def __eq__(self, other: "Atom"):
+        return self.symbol == other.symbol and self.negation == other.negation and self.scope is other.scope
+
+    def __invert__(self):
+        return Atom(self.symbol, not self.negation, self.scope)
+
+    def __repr__(self):
+        if self.negation:
+            return '~' + str(self.symbol)
+        else:
+            return str(self.symbol)
+
+
+class CNFTerm:
+    def __init__(self, atoms: List[Atom], scope: Scope):
+        self.atoms = atoms
+        assert all(atoms[i].scope is scope for i in range(len(atoms)))
+        self.scope = scope
+
+    def __or__(self, other: "CNFTerm"):
+        assert self.scope is other.scope
+        return CNFTerm(self.atoms + other.atoms, self.scope).simplify()
+
+    def simplify(self):
+        i = 0
+        while i < len(self.atoms) - 1:
+            j = i + 1
+            while j < len(self.atoms):
+                if self.atoms[i].symbol == self.atoms[j].symbol:
+                    if self.atoms[i].negation ^ self.atoms[j].negation:
+                        self.atoms = []
+                        return self
+                    else:
+                        self.atoms.pop(j)
+                        j -= 1
+                j += 1
+            i += 1
+        return self
+
+    def __le__(self, other: "CNFTerm"):
+        return all(i in other.atoms for i in self.atoms)
+
+    def __repr__(self):
+        return '(' + '|'.join(map(str, self.atoms)) + ')'
+
+    def __invert__(self):
+        return CNF([CNFTerm([~i], self.scope) for i in self.atoms], self.scope)
+
+    def __str__(self):
+        return self.__repr__()
+
+    def toClause(self):
+        return [(-(self.scope.inverse[i.symbol] + 1)) if i.negation else self.scope.inverse[i.symbol] + 1 for i in
+                self.atoms]
+
+
+class CNF:
+    def __init__(self, terms: List[CNFTerm], scope: Scope):
+        self.terms = terms
+        assert all(terms[i].scope is scope for i in range(len(terms)))
+        self.scope = scope
+
+    def __and__(self, other: "CNF"):
+        assert other.scope is self.scope
+        return CNF(self.terms + other.terms, self.scope)
+
+    def __or__(self, other: "CNF"):
+        assert other.scope is self.scope
+        other.simplify()
+        self.simplify()
+        return CNF([i | j for i, j in itertools.product(self.terms, other.terms)], self.scope).simplify()
+
+    def __invert__(self):
+        start = ~self.terms[0]
+        for i in range(1, len(self.terms)):
+            start |= ~self.terms[i]
+        return start
+
+    def simplify(self):
+        for t in self.terms:
+            t.simplify()
+        self.terms = [t for t in self.terms if len(t.atoms)]
+        i = 0
+        while i < len(self.terms) - 1:
+            j = i + 1
+            while j < len(self.terms):
+                if self.terms[i] <= self.terms[j]:
+                    self.terms.pop(j)
+                    j -= 1
+                elif self.terms[j] <= self.terms[i]:
+                    self.terms.pop(i)
+                    i -= 1
+                    break
+                j += 1
+            i += 1
+        return self
+
+    def __repr__(self):
+        return '&'.join(map(str, self.terms))
+
+    def __str__(self):
+        return self.__repr__()
+
+    def getWeight(self):
+        clauses = [i.toClause() for i in self.terms]
+        mx = 0
+        for i in clauses:
+            mx = max(mx, max(map(abs, i)))
+        c = pyapproxmc.Counter()
+        c.add_clauses(clauses)
+        count = c.count()
+        weight = count[0] * 2 ** (count[1]+len(self.scope)-mx)
+        return weight
+
 
 class WeightsCollection:
     def __init__(self, weights: List[Tuple[float, object]]):
@@ -231,29 +377,31 @@ def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx:
     fmWeight = len(fm.configurations)
     meanAvg = (mean[0] + mean[1]) / 2
     factory = factories[int(meanAvg * 5)](scope)
+    filtered = 1
     annotations = []
     while True:
         expr = factory.newExpression(SymbolWeights(10, scope))
-        avg = (expr & fm.expr).getTruthTable().count(bitarray('1')) / (fmWeight)
+        avg = (expr & fm.expr).toCNF().getWeight()/fm.weight
         if mn < avg < mx:
             annotations.append(expr)
             break
     while len(annotations) < n:
+        filtered += 1
         expr = factory.newExpression(SymbolWeights(10, scope))
-        weight = (expr & fm.expr).getTruthTable().count(bitarray('1')) / (fmWeight)
-        if weight<mn or weight>mx:
+        weight = (expr & fm.expr).toCNF().getWeight()/(fm.weight)
+        if weight < mn or weight > mx:
             continue
-        if mean[0]<avg<mean[1] and mean[0]<(avg*len(annotations)+weight)/(len(annotations)+1)<mean[1]:
+        if mean[0] < avg < mean[1] and mean[0] < (avg * len(annotations) + weight) / (len(annotations) + 1) < mean[1]:
             annotations.append(expr)
-            avg = (avg*len(annotations)+weight)/(len(annotations)+1)
-        elif mean[0]>avg and weight>avg:
+            avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
+        elif mean[0] > avg and weight > avg:
             annotations.append(expr)
-            avg = (avg*len(annotations)+weight)/(len(annotations)+1)
-        elif mean[1]<avg and weight<avg:
+            avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
+        elif mean[1] < avg and weight < avg:
             annotations.append(expr)
-            avg = (avg*len(annotations)+weight)/(len(annotations)+1)
+            avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
+    print("Filtered {} annotations".format(filtered))
     return annotations
-
 
 
 '''
@@ -276,5 +424,8 @@ if __name__ == '__main__':
     plt.hsv()
     scope = Scope(list(sympy.symbols(' '.join(string.ascii_uppercase[:8]))))
     fm = FeatureModel(factories[2](scope).newExpression(SymbolWeights(10, scope)))
-    annotations = generateAnnotations(scope, fm, 100, 0.1, 0.5, (0.22, 0.24))
-    print(annotations)
+    print(fm.weight)
+    annotations = generateAnnotations(scope, fm, 20, 0.1, 0.5, (0.32, 0.34))
+    for i in annotations:
+        cnf = i.toCNF()
+        print(i, cnf, (cnf&fm.expr.toCNF()).getWeight()/fm.weight)

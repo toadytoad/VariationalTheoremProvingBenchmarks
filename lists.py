@@ -1,5 +1,6 @@
 from typing import *
 
+import pyapproxmc
 import sympy
 from bitarray import *
 import random
@@ -90,6 +91,16 @@ class FeatureModel:
         for i in range(len(self.table)):
             if self.table[i] == 1:
                 self.configurations.append(i)
+        cnf = expr.toCNF()
+        clauses = [i.toClause() for i in cnf.terms]
+        mx = 0
+        for i in clauses:
+            mx = max(mx, max(map(abs, i)))
+        c = pyapproxmc.Counter()
+        c.add_clauses(clauses)
+        count = c.count()
+        self.weight = count[0]*2**(count[1]+len(expr.scope)-mx)
+
 
     def applyModelToList(self, lst: VariationalList):
         data = {}
