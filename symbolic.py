@@ -1,8 +1,12 @@
+import itertools
 import random
 import string
+import zlib
 from enum import Enum
+from functools import reduce
 from typing import Callable, List, Tuple, Dict
 
+import pyapproxmc
 import sympy
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -48,15 +52,14 @@ class Operation(Enum):
     NOT = 1
     AND = 2
     OR = 3
-    IMPLIES = 4
-    EQUALS = 5
+    EQUALS = 4
 
 
-operationStrs = [None, "~", "&", "|", "=>", "=="]
-operationFuncs = [None, lambda x: not x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: (not x) | y,
-                  lambda x, y: x == y]
-truthTableFuncs = [None, lambda x: ~x, lambda x, y: x & y, lambda x, y: x | y, lambda x, y: ~x | y,
-                   lambda x, y: ~(x ^ y)]
+operationStrs = [None, "~", "&", "|", "=="]
+operationFuncs = [None, lambda x: not x, lambda *x: reduce(lambda i, j: i & j, x, True),
+                  lambda *x: reduce(lambda i, j: i | j, x, False), lambda x, y: x == y]
+truthTableFuncs = [None, lambda x: ~x, lambda x, size: reduce(lambda i, j: i & j, x, ~bitarray(size)),
+                   lambda x, size: reduce(lambda i, j: i | j, x, bitarray(size)), lambda x, y: ~(x ^ y)]
 
 
 class Expression:
@@ -66,7 +69,7 @@ class Expression:
             assert type(children[0]) is sympy.Symbol
         elif op == Operation.NOT:
             assert len(children) == 1
-        else:
+        elif op == Operation.EQUALS:
             assert len(children) == 2
         self.op = op
         self.children = children
@@ -76,9 +79,13 @@ class Expression:
         if self.op == Operation.SYMBOL:
             return str(self.children[0])
         elif self.op == Operation.NOT:
-            return "(~" + str(self.children[0]) + ")"
+            return "~" + str(self.children[0]) + ""
+        elif self.op == Operation.EQUALS:
+            return "~(" + str(self.children[0]) + "^" + str(self.children[1]) + ")"
+        elif self.op == Operation.AND:
+            return operationStrs[self.op.value].join(map(str, self.children))
         else:
-            return "(" + str(self.children[0]) + operationStrs[self.op.value] + str(self.children[1]) + ")"
+            return "(" + operationStrs[self.op.value].join(map(str, self.children)) + ")"
 
     def applySubstitution(self, substitution: Substitution):
         if self.op == Operation.SYMBOL:
@@ -90,7 +97,12 @@ class Expression:
     def getTruthTable(self):
         if self.op == Operation.SYMBOL:
             return self.scope.truthTables[self.scope.inverse[self.children[0]]]
-        return truthTableFuncs[self.op.value](*map(lambda x: x.getTruthTable(), self.children))
+        if self.op == Operation.NOT:
+            return ~self.children[0].getTruthTable()
+        if self.op == Operation.EQUALS:
+            return truthTableFuncs[self.op.value](*map(lambda x: x.getTruthTable(), self.children))
+        return truthTableFuncs[self.op.value](map(lambda x: x.getTruthTable(), self.children),
+                                              1 << len(self.scope.variables))
 
     def __str__(self):
         return repr(self)
@@ -110,9 +122,149 @@ class Expression:
         assert self.scope == other.scope
         return Expression(Operation.EQUALS, [self, other], self.scope)
 
-    def __ge__(self, other: "Expression"):
-        assert self.scope == other.scope
-        return Expression(Operation.IMPLIES, [self, other], self.scope)
+    def toCNF(self):
+        if self.op == Operation.SYMBOL:
+            return CNF([CNFTerm([Atom(self.children[0], False, self.scope)], self.scope)], self.scope)
+        elif self.op == Operation.NOT:
+            return ~self.children[0].toCNF()
+        elif self.op == Operation.AND:
+            start = self.children[0].toCNF()
+            for i in range(1, len(self.children)):
+                start &= self.children[i].toCNF()
+            return start
+        elif self.op == Operation.OR:
+            start = self.children[0].toCNF()
+            for i in range(1, len(self.children)):
+                start |= self.children[i].toCNF()
+            return start
+        else:
+            return NotImplementedError("Only Or, And, and Not are supported at this time.")
+
+
+# TODO to cnf form, create a cnf type that can be anded or ored with another cnf type to form another
+# For and, it's easy, just combine the terms together
+# For Or, distribute each term. CNF: List[CNFTerm], CNFTerm: List[Atom]
+
+class Atom:
+    def __init__(self, symbol: sympy.Symbol, negation: bool, scope: Scope):
+        assert symbol in scope.variables
+        self.symbol = symbol
+        self.negation = negation
+        self.scope = scope
+
+    def __eq__(self, other: "Atom"):
+        return self.symbol == other.symbol and self.negation == other.negation and self.scope is other.scope
+
+    def __invert__(self):
+        return Atom(self.symbol, not self.negation, self.scope)
+
+    def __repr__(self):
+        if self.negation:
+            return '~' + str(self.symbol)
+        else:
+            return str(self.symbol)
+
+
+class CNFTerm:
+    def __init__(self, atoms: List[Atom], scope: Scope):
+        self.atoms = atoms
+        assert all(atoms[i].scope is scope for i in range(len(atoms)))
+        self.scope = scope
+
+    def __or__(self, other: "CNFTerm"):
+        assert self.scope is other.scope
+        return CNFTerm(self.atoms + other.atoms, self.scope).simplify()
+
+    def simplify(self):
+        i = 0
+        while i < len(self.atoms) - 1:
+            j = i + 1
+            while j < len(self.atoms):
+                if self.atoms[i].symbol == self.atoms[j].symbol:
+                    if self.atoms[i].negation ^ self.atoms[j].negation:
+                        self.atoms = []
+                        return self
+                    else:
+                        self.atoms.pop(j)
+                        j -= 1
+                j += 1
+            i += 1
+        return self
+
+    def __le__(self, other: "CNFTerm"):
+        return all(i in other.atoms for i in self.atoms)
+
+    def __repr__(self):
+        return '(' + '|'.join(map(str, self.atoms)) + ')'
+
+    def __invert__(self):
+        return CNF([CNFTerm([~i], self.scope) for i in self.atoms], self.scope)
+
+    def __str__(self):
+        return self.__repr__()
+
+    def toClause(self):
+        return [(-(self.scope.inverse[i.symbol] + 1)) if i.negation else self.scope.inverse[i.symbol] + 1 for i in
+                self.atoms]
+
+
+class CNF:
+    def __init__(self, terms: List[CNFTerm], scope: Scope):
+        self.terms = terms
+        assert all(terms[i].scope is scope for i in range(len(terms)))
+        self.scope = scope
+
+    def __and__(self, other: "CNF"):
+        assert other.scope is self.scope
+        return CNF(self.terms + other.terms, self.scope)
+
+    def __or__(self, other: "CNF"):
+        assert other.scope is self.scope
+        other.simplify()
+        self.simplify()
+        return CNF([i | j for i, j in itertools.product(self.terms, other.terms)], self.scope).simplify()
+
+    def __invert__(self):
+        start = ~self.terms[0]
+        for i in range(1, len(self.terms)):
+            start |= ~self.terms[i]
+        return start
+
+    def simplify(self):
+        for t in self.terms:
+            t.simplify()
+        self.terms = [t for t in self.terms if len(t.atoms)]
+        i = 0
+        while i < len(self.terms) - 1:
+            j = i + 1
+            while j < len(self.terms):
+                if self.terms[i] <= self.terms[j]:
+                    self.terms.pop(j)
+                    j -= 1
+                elif self.terms[j] <= self.terms[i]:
+                    self.terms.pop(i)
+                    i -= 1
+                    break
+                j += 1
+            i += 1
+        return self
+
+    def __repr__(self):
+        return '&'.join(map(str, self.terms))
+
+    def __str__(self):
+        return self.__repr__()
+
+    def getWeight(self):
+        clauses = [i.toClause() for i in self.terms]
+        mx = 0
+        for i in clauses:
+            mx = max(mx, max(map(abs, i)))
+        c = pyapproxmc.Counter()
+        c.add_clauses(clauses)
+        count = c.count()
+        weight = count[0] * 2 ** (count[1]+len(self.scope)-mx)
+        return weight
 
 
 class WeightsCollection:
@@ -141,29 +293,34 @@ class VariableWeights:
             self.cache[index] = WeightsCollection(weight)
         return self.cache[index]
 
+
 class SymbolWeights:
     def __init__(self, factor: float, scope: Scope):
         self.scope = scope
-        self.weights = [1]*len(self.scope)
+        self.weights = [1] * len(self.scope)
         self.f = factor
+
     def __getitem__(self, rand: random.Random):
         psa = [self.weights[0]]
         for i in range(1, len(self.weights)):
             psa.append(self.weights[i] + psa[-1])
         val = rand.random() * psa[-1]
         for i in range(len(self.weights)):
-            if val<psa[i]:
+            if val < psa[i]:
                 self.weights[i] /= self.f
                 return self.scope.variables[i]
 
 
 class RandomExpressionFactory:
-    def __init__(self, weights: VariableWeights, rand: random.Random, scope: Scope):
+    def __init__(self, weights: VariableWeights, rand: random.Random, scope: Scope, andWeights: WeightsCollection,
+                 orWeights: WeightsCollection):
         self.weights = weights
         self.rand = rand
         self.scope = scope
+        self.andWeights = andWeights
+        self.orWeights = orWeights
 
-    def newExpression(self, sw:SymbolWeights, depth=0) -> Expression:
+    def newExpression(self, sw: SymbolWeights, depth=0) -> Expression:
         weight = self.weights[depth]
         op = weight[self.rand]
         if op == Operation.SYMBOL:
@@ -175,8 +332,77 @@ class RandomExpressionFactory:
 
         elif op == Operation.NOT:
             return Expression(op, [self.newExpression(sw, depth + 1)], self.scope)
-        else:
+        elif op == Operation.EQUALS:
             return Expression(op, [self.newExpression(sw, depth + 1), self.newExpression(sw, depth + 1)], self.scope)
+        elif op == Operation.AND:
+            return Expression(op, [self.newExpression(sw, depth + 1) for z in range(self.andWeights[self.rand])],
+                              self.scope)
+        elif op == Operation.OR:
+            return Expression(op, [self.newExpression(sw, depth + 1) for z in range(self.orWeights[self.rand])],
+                              self.scope)
+
+
+from lists import *
+
+factories = [lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (3) * x, Operation.SYMBOL),
+                                                                    (lambda x: (0 if x % 2 else 3), Operation.AND),
+                                                                    (lambda x: (3 if x % 2 else 0), Operation.OR)]),
+                                                   rand, scope, WeightsCollection([(1, 2), (7, 3), (3, 4)]),
+                                                   WeightsCollection([(9, 2), (0.8, 3), (0.2, 4)])),
+             lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (x - 1) * x, Operation.SYMBOL),
+                                                                    (lambda x: (0 if x % 2 else 3), Operation.AND),
+                                                                    (lambda x: (2 if x % 2 else 0), Operation.OR)]),
+                                                   rand, scope, WeightsCollection([(10, 2), (3, 3)]),
+                                                   WeightsCollection([(10, 2)])),
+             lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: 1.5 * (x - 1) * x, Operation.SYMBOL),
+                                                                    (lambda x: (0 if x % 2 else 2), Operation.AND),
+                                                                    (lambda x: (2 if x % 2 else 0), Operation.OR)]),
+                                                   rand, scope, WeightsCollection([(10, 2)]),
+                                                   WeightsCollection([(1, 2)])),
+             lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (x - 1) * x, Operation.SYMBOL),
+                                                                    (lambda x: (0 if x % 2 else 3), Operation.OR),
+                                                                    (lambda x: (2 if x % 2 else 0), Operation.AND)]),
+                                                   rand, scope, WeightsCollection([(10, 2)]),
+                                                   WeightsCollection([(10, 2), (3, 3)])),
+             lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (3) * x, Operation.SYMBOL),
+                                                                    (lambda x: (0 if x % 2 else 3), Operation.OR),
+                                                                    (lambda x: (3 if x % 2 else 0), Operation.AND)]),
+                                                   rand, scope, WeightsCollection([(9, 2), (0.8, 3), (0.2, 4)]),
+                                                   WeightsCollection([(1, 2), (7, 3), (2, 4)]))
+             ]
+
+
+def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx: float, mean: Tuple[float, float]) -> \
+        List[Expression]:
+    fmWeight = len(fm.configurations)
+    meanAvg = (mean[0] + mean[1]) / 2
+    factory = factories[int(meanAvg * 5)](scope)
+    filtered = 1
+    annotations = []
+    while True:
+        expr = factory.newExpression(SymbolWeights(10, scope))
+        avg = (expr & fm.expr).toCNF().getWeight()/fm.weight
+        if mn < avg < mx:
+            annotations.append(expr)
+            break
+    while len(annotations) < n:
+        filtered += 1
+        expr = factory.newExpression(SymbolWeights(10, scope))
+        weight = (expr & fm.expr).toCNF().getWeight()/(fm.weight)
+        if weight < mn or weight > mx:
+            continue
+        if mean[0] < avg < mean[1] and mean[0] < (avg * len(annotations) + weight) / (len(annotations) + 1) < mean[1]:
+            annotations.append(expr)
+            avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
+        elif mean[0] > avg and weight > avg:
+            annotations.append(expr)
+            avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
+        elif mean[1] < avg and weight < avg:
+            annotations.append(expr)
+            avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
+    print("Filtered {} annotations".format(filtered))
+    return annotations
+
 
 '''
 This variable weight expression seems to generate some decently nice data.
@@ -188,33 +414,18 @@ This can be used to generate the opposite sided list by negating the entire expr
 You can then apply demorgans law if you wish to turn this expression into a different looking one if you wish.
 For some reason simply swapping and and or fails to generate the opposite sided distribution list.
 '''
+# TODO: Add some rules to make a tree simplify itself.
+# This would involve defining a set of checks, for example True|x = True, ~x|x = True, ~x&x = False, etc...
+# doing a leaf search first should make this only have to happen once.
 if __name__ == '__main__':
     rand = random.Random()
-    start = 9
-    end = 10
+    start = 0
+    end = 1
     plt.hsv()
     scope = Scope(list(sympy.symbols(' '.join(string.ascii_uppercase[:8]))))
-    for i in range(start, end):
-
-        print(scope)
-        vw = VariableWeights([(lambda x: 2*x, Operation.SYMBOL), (lambda x: i/(x+1), Operation.EQUALS),
-                              (lambda x: 0/(x*x+1), Operation.IMPLIES), (lambda x: (2*i)/(x+1)*(1/5 if x%2 else 5), Operation.OR),
-                              (lambda x: (8)/(x+1)*(5 if x%2 else 1/5), Operation.AND), (lambda x: 1/(x+1), Operation.NOT)])
-        factory = RandomExpressionFactory(vw, rand, scope)
-        data = []
-        for j in range(10000):
-            symbolWeights = SymbolWeights(5, scope)
-            expr = factory.newExpression(symbolWeights)
-            tt = expr.getTruthTable()
-            data.append(tt.count(bitarray('1'))/(1<<8))
-        density = gaussian_kde(data)
-        xs = np.linspace(0, 1, 2000)
-        density.covariance_factor = lambda: .25
-        density._compute_covariance()
-
-        plt.plot(xs, density(xs), label=str(i))
-    expr = factory.newExpression(SymbolWeights(4, scope))
-    print(expr)
-    print(expr.getTruthTable().tobytes().hex())
-    plt.legend(loc='upper left')
-    plt.show()
+    fm = FeatureModel(factories[2](scope).newExpression(SymbolWeights(10, scope)))
+    print(fm.weight)
+    annotations = generateAnnotations(scope, fm, 20, 0.1, 0.5, (0.32, 0.34))
+    for i in annotations:
+        cnf = i.toCNF()
+        print(i, cnf, (cnf&fm.expr.toCNF()).getWeight()/fm.weight)
