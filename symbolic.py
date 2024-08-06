@@ -5,6 +5,7 @@ import zlib
 from enum import Enum
 from functools import reduce
 from typing import Callable, List, Tuple, Dict
+import argparse
 
 import pyapproxmc
 import sympy
@@ -75,11 +76,27 @@ class Expression:
         self.children = children
         self.scope = scope
 
+
+    @staticmethod
+    def deserialize(s:dict, scope:Scope):
+        op = Operation(s['op'])
+        if op == Operation.SYMBOL:
+            return Expression(op, sympy.symbols(s['symbol']), scope)
+        else:
+            return Expression(op, list(map(Expression.deserialize, s['children'])), scope)
+
+    def serialize(self):
+        if self.op == Operation.SYMBOL:
+            return {"op": self.op.value, "symbol":str(self.children[0])}
+        else:
+            return {"op:":self.op.value, "children":list(map(Expression.serialize, self.children))}
+
     def __repr__(self):
         if self.op == Operation.SYMBOL:
             return str(self.children[0])
         elif self.op == Operation.NOT:
-            return "~" + str(self.children[0]) + ""
+            return "~" + str(self.children[0]) if self.children[0].op == Operation.SYMBOL else "~(" + str(
+                self.children[0]) + ")"
         elif self.op == Operation.EQUALS:
             return "~(" + str(self.children[0]) + "^" + str(self.children[1]) + ")"
         elif self.op == Operation.AND:
@@ -141,9 +158,28 @@ class Expression:
             return NotImplementedError("Only Or, And, and Not are supported at this time.")
 
 
-# TODO to cnf form, create a cnf type that can be anded or ored with another cnf type to form another
-# For and, it's easy, just combine the terms together
-# For Or, distribute each term. CNF: List[CNFTerm], CNFTerm: List[Atom]
+class FeatureModel:
+    def __init__(self, expr: Expression):
+        self.expr = expr
+        self.cnf = expr.toCNF()
+        clauses = [i.toClause() for i in self.cnf.terms]
+        mx = 0
+        for i in clauses:
+            mx = max(mx, max(map(abs, i)))
+        c = pyapproxmc.Counter()
+        c.add_clauses(clauses)
+        count = c.count()
+        self.weight = count[0] * 2 ** (count[1] + len(expr.scope) - mx)
+
+    def applyModelToList(self, lst: "VariationalList"):
+        raise NotImplementedError
+
+    def __repr__(self):
+        return repr(self.expr)
+
+    def __len__(self):
+        return self.weight
+
 
 class Atom:
     def __init__(self, symbol: sympy.Symbol, negation: bool, scope: Scope):
@@ -263,7 +299,7 @@ class CNF:
         c = pyapproxmc.Counter()
         c.add_clauses(clauses)
         count = c.count()
-        weight = count[0] * 2 ** (count[1]+len(self.scope)-mx)
+        weight = count[0] * 2 ** (count[1] + len(self.scope) - mx)
         return weight
 
 
@@ -342,32 +378,32 @@ class RandomExpressionFactory:
                               self.scope)
 
 
-from lists import *
+
 
 factories = [lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (3) * x, Operation.SYMBOL),
                                                                     (lambda x: (0 if x % 2 else 3), Operation.AND),
                                                                     (lambda x: (3 if x % 2 else 0), Operation.OR)]),
-                                                   rand, scope, WeightsCollection([(1, 2), (7, 3), (3, 4)]),
+                                                   random, scope, WeightsCollection([(1, 2), (7, 3), (3, 4)]),
                                                    WeightsCollection([(9, 2), (0.8, 3), (0.2, 4)])),
              lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (x - 1) * x, Operation.SYMBOL),
                                                                     (lambda x: (0 if x % 2 else 3), Operation.AND),
                                                                     (lambda x: (2 if x % 2 else 0), Operation.OR)]),
-                                                   rand, scope, WeightsCollection([(10, 2), (3, 3)]),
+                                                   random, scope, WeightsCollection([(10, 2), (3, 3)]),
                                                    WeightsCollection([(10, 2)])),
              lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: 1.5 * (x - 1) * x, Operation.SYMBOL),
                                                                     (lambda x: (0 if x % 2 else 2), Operation.AND),
                                                                     (lambda x: (2 if x % 2 else 0), Operation.OR)]),
-                                                   rand, scope, WeightsCollection([(10, 2)]),
+                                                   random, scope, WeightsCollection([(10, 2)]),
                                                    WeightsCollection([(1, 2)])),
              lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (x - 1) * x, Operation.SYMBOL),
                                                                     (lambda x: (0 if x % 2 else 3), Operation.OR),
                                                                     (lambda x: (2 if x % 2 else 0), Operation.AND)]),
-                                                   rand, scope, WeightsCollection([(10, 2)]),
+                                                   random, scope, WeightsCollection([(10, 2)]),
                                                    WeightsCollection([(10, 2), (3, 3)])),
              lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (3) * x, Operation.SYMBOL),
                                                                     (lambda x: (0 if x % 2 else 3), Operation.OR),
                                                                     (lambda x: (3 if x % 2 else 0), Operation.AND)]),
-                                                   rand, scope, WeightsCollection([(9, 2), (0.8, 3), (0.2, 4)]),
+                                                   random, scope, WeightsCollection([(9, 2), (0.8, 3), (0.2, 4)]),
                                                    WeightsCollection([(1, 2), (7, 3), (2, 4)]))
              ]
 
@@ -381,14 +417,14 @@ def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx:
     annotations = []
     while True:
         expr = factory.newExpression(SymbolWeights(10, scope))
-        avg = (expr & fm.expr).toCNF().getWeight()/fm.weight
+        avg = (expr & fm.expr).toCNF().getWeight() / fm.weight
         if mn < avg < mx:
             annotations.append(expr)
             break
     while len(annotations) < n:
         filtered += 1
         expr = factory.newExpression(SymbolWeights(10, scope))
-        weight = (expr & fm.expr).toCNF().getWeight()/(fm.weight)
+        weight = (expr & fm.expr).toCNF().getWeight() / (fm.weight)
         if weight < mn or weight > mx:
             continue
         if mean[0] < avg < mean[1] and mean[0] < (avg * len(annotations) + weight) / (len(annotations) + 1) < mean[1]:
@@ -405,21 +441,9 @@ def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx:
 
 
 '''
-This variable weight expression seems to generate some decently nice data.
-vw = VariableWeights([(lambda x: 2*x, Operation.SYMBOL), (lambda x: i/(x+1), Operation.EQUALS),
-                              (lambda x: 0/(x*x+1), Operation.IMPLIES), (lambda x: (2*i)/(x+1)*(1/5 if x%2 else 5), Operation.OR),
-                              (lambda x: (8)/(x+1)*(5 if x%2 else 1/5), Operation.AND), (lambda x: 1/(x+1), Operation.NOT)])
-i can be varied between 1 and 20 to get a variety of different weight peaks in order to generate several different distributions.
-This can be used to generate the opposite sided list by negating the entire expression during generation (i.e swapping and and or to keep the same parity, and then making the NOT expression massive for x=0)
-You can then apply demorgans law if you wish to turn this expression into a different looking one if you wish.
-For some reason simply swapping and and or fails to generate the opposite sided distribution list.
-'''
-# TODO: Add some rules to make a tree simplify itself.
-# This would involve defining a set of checks, for example True|x = True, ~x|x = True, ~x&x = False, etc...
-# doing a leaf search first should make this only have to happen once.
 if __name__ == '__main__':
     rand = random.Random()
-    start = 0
+    start = 3
     end = 1
     plt.hsv()
     scope = Scope(list(sympy.symbols(' '.join(string.ascii_uppercase[:8]))))
@@ -428,4 +452,15 @@ if __name__ == '__main__':
     annotations = generateAnnotations(scope, fm, 20, 0.1, 0.5, (0.32, 0.34))
     for i in annotations:
         cnf = i.toCNF()
-        print(i, cnf, (cnf&fm.expr.toCNF()).getWeight()/fm.weight)
+        print(i, cnf, (cnf & fm.expr.toCNF()).getWeight() / fm.weight)
+'''
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Generate annotations under a given feature model')
+    parser.add_argument('--n', dest='n', type=int, help='number of annotations to generate')
+    parser.add_argument('--min', dest='mn', type=float, help='minimum weight of annotation under feature model')
+    parser.add_argument('--max', dest='mx', type=float, help='maximum weight of annotation under feature model')
+    parser.add_argument('--meanlo', dest='meanlo', type=float, help='lower bound on mean of weights')
+    parser.add_argument('--meanhi', dest='meanhi', type=float, help='upper bound on mean of weights')
+    parser.add_argument('--featuremodel', '--fm', dest='fm', type=str, help='feature model')
+    parser.add_argument('vars', nargs='*', help='variables')

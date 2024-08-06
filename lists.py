@@ -1,11 +1,10 @@
 from typing import *
 
-import pyapproxmc
 import sympy
 from bitarray import *
 import random
 
-from symbolic import Expression, Scope, RandomExpressionFactory, VariableWeights, Operation, SymbolWeights
+from symbolic import Expression, Scope, RandomExpressionFactory, VariableWeights, Operation, SymbolWeights, FeatureModel
 
 
 # "configurations" here are just bitmask representations of the truth of variables. e.g. bit 0 could correspond to "A".
@@ -83,39 +82,7 @@ class VariationalList:
         return iter(self.lst)
 
 
-class FeatureModel:
-    def __init__(self, expr: Expression):
-        self.table = expr.getTruthTable()
-        self.expr = expr
-        self.configurations = []
-        for i in range(len(self.table)):
-            if self.table[i] == 1:
-                self.configurations.append(i)
-        cnf = expr.toCNF()
-        clauses = [i.toClause() for i in cnf.terms]
-        mx = 0
-        for i in clauses:
-            mx = max(mx, max(map(abs, i)))
-        c = pyapproxmc.Counter()
-        c.add_clauses(clauses)
-        count = c.count()
-        self.weight = count[0]*2**(count[1]+len(expr.scope)-mx)
 
-
-    def applyModelToList(self, lst: VariationalList):
-        data = {}
-        for configuration in self.configurations:
-            product = lst[configuration]
-            if product not in data:
-                data[product] = []
-            data[product].append(configuration)
-        return ProductLine(self, data, lst)
-
-    def __repr__(self):
-        return repr(self.expr)
-
-    def __len__(self):
-        return len(self.configurations)
 
 
 class ProductLine:
