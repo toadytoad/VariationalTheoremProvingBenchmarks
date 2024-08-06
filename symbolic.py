@@ -6,6 +6,7 @@ from enum import Enum
 from functools import reduce
 from typing import Callable, List, Tuple, Dict
 import argparse
+import json
 
 import pyapproxmc
 import sympy
@@ -76,20 +77,19 @@ class Expression:
         self.children = children
         self.scope = scope
 
-
     @staticmethod
-    def deserialize(s:dict, scope:Scope):
+    def deserialize(s: dict, scope: Scope):
         op = Operation(s['op'])
         if op == Operation.SYMBOL:
-            return Expression(op, sympy.symbols(s['symbol']), scope)
+            return Expression(op, [sympy.symbols(s['symbol'])], scope)
         else:
-            return Expression(op, list(map(Expression.deserialize, s['children'])), scope)
+            return Expression(op, list(map(lambda x: Expression.deserialize(x, scope), s['children'])), scope)
 
     def serialize(self):
         if self.op == Operation.SYMBOL:
-            return {"op": self.op.value, "symbol":str(self.children[0])}
+            return {"op": self.op.value, "symbol": str(self.children[0])}
         else:
-            return {"op:":self.op.value, "children":list(map(Expression.serialize, self.children))}
+            return {"op": self.op.value, "children": list(map(Expression.serialize, self.children))}
 
     def __repr__(self):
         if self.op == Operation.SYMBOL:
@@ -378,8 +378,6 @@ class RandomExpressionFactory:
                               self.scope)
 
 
-
-
 factories = [lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (3) * x, Operation.SYMBOL),
                                                                     (lambda x: (0 if x % 2 else 3), Operation.AND),
                                                                     (lambda x: (3 if x % 2 else 0), Operation.OR)]),
@@ -410,7 +408,6 @@ factories = [lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: (
 
 def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx: float, mean: Tuple[float, float]) -> \
         List[Expression]:
-    fmWeight = len(fm.configurations)
     meanAvg = (mean[0] + mean[1]) / 2
     factory = factories[int(meanAvg * 5)](scope)
     filtered = 1
@@ -457,10 +454,32 @@ if __name__ == '__main__':
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate annotations under a given feature model')
-    parser.add_argument('--n', dest='n', type=int, help='number of annotations to generate')
-    parser.add_argument('--min', dest='mn', type=float, help='minimum weight of annotation under feature model')
-    parser.add_argument('--max', dest='mx', type=float, help='maximum weight of annotation under feature model')
-    parser.add_argument('--meanlo', dest='meanlo', type=float, help='lower bound on mean of weights')
-    parser.add_argument('--meanhi', dest='meanhi', type=float, help='upper bound on mean of weights')
-    parser.add_argument('--featuremodel', '--fm', dest='fm', type=str, help='feature model')
-    parser.add_argument('vars', nargs='*', help='variables')
+    # parser.add_argument('--n', dest='n', type=int, help='number of annotations to generate')
+    # parser.add_argument('--min', dest='mn', type=float, help='minimum weight of annotation under feature model')
+    # parser.add_argument('--max', dest='mx', type=float, help='maximum weight of annotation under feature model')
+    # parser.add_argument('--meanlo', dest='meanlo', type=float, help='lower bound on mean of weights')
+    # parser.add_argument('--meanhi', dest='meanhi', type=float, help='upper bound on mean of weights')
+    # parser.add_argument('--featuremodel', '--fm', dest='fm', type=str, help='feature model')
+    # parser.add_argument('vars', nargs='*', help='variables')
+    parser.add_argument('command', choices=['annotations', 'featuremodel'])
+    parser.add_argument('input', type=argparse.FileType('r'))
+    parser.add_argument('output', type=argparse.FileType('w'))
+    args = parser.parse_args()
+    command = args.command
+    out = args.output
+    args = json.loads(args.input.read())
+    if command == 'annotations':
+        scope = Scope(list(sympy.symbols(' '.join(args['vars']))))
+        fm = FeatureModel(Expression.deserialize(args['fm'], scope))
+        annotations = generateAnnotations(scope, fm, args['n'], args['min'], args['max'], args['mean'])
+        out.write(json.dumps(
+            {'fm': fm.expr.serialize(),
+             "annotations": list(map(lambda x: x.serialize(), annotations)),
+             "n": args['n'],
+             "vars": list(map(str, scope.variables))}))
+        out.close()
+    elif command == 'featuremodel':
+        scope = Scope(list(sympy.symbols(' '.join(args['vars']))))
+        fm = FeatureModel(factories[2](scope).newExpression(SymbolWeights(10, scope)))
+        out.write(json.dumps({"fm": fm.expr.serialize(), "vars": list(map(str, scope.variables))}))
+        out.close()
