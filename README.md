@@ -1,6 +1,10 @@
 # Annotation generation
 This module provides methods for generating annotations under given feature models (which can also be generated randomly) to create data for variational theorem proving.
 
+## Requirements
+The following python libraries are required:
+[`sympy`](https://www.sympy.org/en/index.html), [`bitarray`](https://pypi.org/project/bitarray/), and [`pyapproxmc`](https://pypi.org/project/pyapproxmc/)
+
 ## Generating a Feature Model
 To generate a feature model use the following command:
 ```
