@@ -1,7 +1,5 @@
 import itertools
 import random
-import string
-import zlib
 from enum import Enum
 from functools import reduce
 from typing import Callable, List, Tuple, Dict
@@ -10,11 +8,6 @@ import json
 
 import pyapproxmc
 import sympy
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from matplotlib import cm
-import numpy as np
-from scipy.stats import gaussian_kde
 from bitarray import bitarray
 
 
