@@ -22,13 +22,6 @@ class Scope:
     def __init__(self, v: List[sympy.Symbol]):
         self.variables = v
         self.inverse = {v[i]: i for i in range(len(v))}
-        self.truthTables = []
-        for i in range(len(v)):
-            tt = bitarray(1 << len(v))
-            for j in range(1 << len(v)):
-                if j & (1 << i):
-                    tt[j] = 1
-            self.truthTables.append(tt)
 
     def __len__(self):
         return len(self.variables)
@@ -78,19 +71,22 @@ class Expression:
         self.scope = scope
 
     @staticmethod
-    def deserialize(s: dict, scope: Scope):
-        op = Operation(s['op'])
-        if op == Operation.SYMBOL:
-            return Expression(op, [sympy.symbols(s['symbol'])], scope)
-        else:
-            return Expression(op, list(map(lambda x: Expression.deserialize(x, scope), s['children'])), scope)
-
+    def deserialize(ser: str, scope: Scope):
+        globs = {}
+        for var in scope.variables:
+            globs[str(var)] = Expression(Operation.SYMBOL, [var], scope)
+        return eval(ser, globs, {})
     def serialize(self):
         if self.op == Operation.SYMBOL:
-            return {"op": self.op.value, "symbol": str(self.children[0])}
+            return str(self.children[0])
+        elif self.op == Operation.NOT:
+            return "~" + self.children[0].serialize() if self.children[0].op == Operation.SYMBOL else "~(" + self.children[0].serialize() + ")"
+        elif self.op == Operation.EQUALS:
+            return "~(" + str(self.children[0]) + "^" + self.children[1].serialize() + ")"
+        elif self.op == Operation.AND:
+            return operationStrs[self.op.value].join(map(Expression.serialize, self.children))
         else:
-            return {"op": self.op.value, "children": list(map(Expression.serialize, self.children))}
-
+            return "(" + operationStrs[self.op.value].join(map(Expression.serialize, self.children)) + ")"
     def __repr__(self):
         if self.op == Operation.SYMBOL:
             return str(self.children[0])
@@ -126,10 +122,22 @@ class Expression:
 
     def __or__(self, other: "Expression"):
         assert self.scope == other.scope
+        if self.op==Operation.OR and other.op == Operation.OR:
+            return Expression(Operation.OR, self.children+other.children, self.scope)
+        elif self.op==Operation.OR:
+            return Expression(Operation.OR, self.children+[other], self.scope)
+        elif other.op==Operation.OR:
+            return Expression(Operation.OR, other.children+[self], self.scope)
         return Expression(Operation.OR, [self, other], self.scope)
 
     def __and__(self, other: "Expression"):
         assert self.scope == other.scope
+        if self.op==Operation.AND and other.op == Operation.AND:
+            return Expression(Operation.AND, self.children+other.children, self.scope)
+        elif self.op==Operation.AND:
+            return Expression(Operation.AND, self.children+[other], self.scope)
+        elif other.op==Operation.AND:
+            return Expression(Operation.AND, other.children+[self], self.scope)
         return Expression(Operation.AND, [self, other], self.scope)
 
     def __invert__(self):
@@ -424,7 +432,7 @@ def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx:
         weight = (expr & fm.expr).toCNF().getWeight() / (fm.weight)
         if weight < mn or weight > mx:
             continue
-        if mean[0] < avg < mean[1] and mean[0] < (avg * len(annotations) + weight) / (len(annotations) + 1) < mean[1]:
+        if mean[0] <= avg <= mean[1] and mean[0] <= (avg * len(annotations) + weight) / (len(annotations) + 1) <= mean[1]:
             annotations.append(expr)
             avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
         elif mean[0] > avg and weight > avg:
@@ -433,6 +441,7 @@ def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx:
         elif mean[1] < avg and weight < avg:
             annotations.append(expr)
             avg = (avg * len(annotations) + weight) / (len(annotations) + 1)
+        print(len(annotations), weight, avg, (avg * len(annotations) + weight) / (len(annotations) + 1))
     print("Filtered {} annotations".format(filtered))
     return annotations
 
@@ -469,9 +478,15 @@ if __name__ == '__main__':
     out = args.output
     args = json.loads(args.input.read())
     if command == 'annotations':
+        for var in args['vars']:
+            if any(i in var for i in ' &|~()'):
+                print("Invalid variable name: " + var)
+                exit(1)
         scope = Scope(list(sympy.symbols(' '.join(args['vars']))))
         fm = FeatureModel(Expression.deserialize(args['fm'], scope))
+        print("Loaded feature model and scope")
         annotations = generateAnnotations(scope, fm, args['n'], args['min'], args['max'], args['mean'])
+        print("Generated")
         out.write(json.dumps(
             {'fm': fm.expr.serialize(),
              "annotations": list(map(lambda x: x.serialize(), annotations)),
@@ -479,6 +494,10 @@ if __name__ == '__main__':
              "vars": list(map(str, scope.variables))}))
         out.close()
     elif command == 'featuremodel':
+        for var in args['vars']:
+            if any(i in var for i in ' &|~()'):
+                print("Invalid variable name: " + var)
+                exit(1)
         scope = Scope(list(sympy.symbols(' '.join(args['vars']))))
         fm = FeatureModel(factories[2](scope).newExpression(SymbolWeights(10, scope)))
         out.write(json.dumps({"fm": fm.expr.serialize(), "vars": list(map(str, scope.variables))}))
