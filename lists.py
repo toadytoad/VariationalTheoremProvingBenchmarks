@@ -70,7 +70,7 @@ class VariationalList:
         self.lst = lst
 
     def __getitem__(self, ind):
-        return tuple([i.val for i in self.lst if i.table[ind]])
+        return self.lst[ind]
 
     def __repr__(self):
         return repr(self.lst)
@@ -126,14 +126,39 @@ class ProductLine:
     def getWeights(self):
         return list(map(lambda x: x.deg(self.fm), self.lst))
 
+# Length of list
+# Choose elements from 0 to n-1
+# x contiguous sublists of size at least k with the same annotations
+# at least ... elements appear m_i times.
 
-def generateVariationalList(listSize: int, listDistribution: Callable[[], int], factory: RandomExpressionFactory):
+
+def generateVariationalList(listSize: int, elements:Set,elementRepetitions:List[int], contiguousSublists:List[int], annotationBank:List[Expression]):
     lst = []
+    for i in elementRepetitions:
+        element = random.choice(list(elements))
+        elements.remove(element)
+        lst+=[element]*i
+    assert len(lst) <= listSize
+    lst+=random.choices(list(elements), k=listSize-len(lst))
+    random.shuffle(lst)
+    assert len(contiguousSublists) <= listSize-sum(contiguousSublists)
+    indices = random.sample(range(listSize-sum(contiguousSublists)+len(contiguousSublists)), k=2*len(contiguousSublists))
+    annotations = [None]*listSize
+    x = 0
+    for i in range(0, len(indices), 2):
+        start = indices[i]+x
+        x+=contiguousSublists[i//2]-1
+        end = indices[i+1]+x
+        annotation = random.choice(annotationBank)
+        annotationBank.remove(annotation)
+        for j in range(start, end+1):
+            annotations[j] = annotation
     for i in range(listSize):
-        # make the necessary calls to the random distributions, and generate a list.
-        expr = factory.newExpression(SymbolWeights(5, factory.scope))
-        lst.append(VariationalElement(listDistribution(), expr))
-    return VariationalList(lst)
+        if annotations[i] is None:
+            annotations[i] = random.choice(annotationBank)
+            annotationBank.remove(annotations[i])
+
+    return VariationalList([VariationalElement(i, j) for i, j in zip(lst, annotations)])
 
 
 if __name__ == "__main__":
