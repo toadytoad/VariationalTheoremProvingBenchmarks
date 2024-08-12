@@ -1,4 +1,5 @@
 from typing import *
+import json
 
 import sympy
 from bitarray import *
@@ -51,18 +52,11 @@ class VariationalElement:
     def __init__(self, val: int, variation: Expression):
         self.val = val
         self.var = variation
-        self.table = variation.getTruthTable()
 
-    def __getitem__(self, ind):
-        return self.table[ind]
 
     def __repr__(self):
         return "(" + str(self.val) + ", " + repr(self.var) + ")"
 
-    def deg(self, fm: "FeatureModel"):
-        if len(fm) == 0:
-            return 0
-        return sum(self.table[i] for i in fm.configurations) / len(fm)
 
 
 class VariationalList:
@@ -142,13 +136,16 @@ def generateVariationalList(listSize: int, elements:Set,elementRepetitions:List[
     lst+=random.choices(list(elements), k=listSize-len(lst))
     random.shuffle(lst)
     assert len(contiguousSublists) <= listSize-sum(contiguousSublists)
-    indices = random.sample(range(listSize-sum(contiguousSublists)+len(contiguousSublists)), k=2*len(contiguousSublists))
+    indices = sorted(random.sample(range(listSize-sum(contiguousSublists)+len(contiguousSublists)), k=2*len(contiguousSublists)))
     annotations = [None]*listSize
+    print(indices)
     x = 0
+    random.shuffle(contiguousSublists)
     for i in range(0, len(indices), 2):
         start = indices[i]+x
         x+=contiguousSublists[i//2]-1
         end = indices[i+1]+x
+        print(start, end)
         annotation = random.choice(annotationBank)
         annotationBank.remove(annotation)
         for j in range(start, end+1):
@@ -158,31 +155,11 @@ def generateVariationalList(listSize: int, elements:Set,elementRepetitions:List[
             annotations[i] = random.choice(annotationBank)
             annotationBank.remove(annotations[i])
 
-    return VariationalList([VariationalElement(i, j) for i, j in zip(lst, annotations)])
+    return [VariationalElement(i, j) for i, j in zip(lst, annotations)]
 
 
 if __name__ == "__main__":
-    scope = Scope(list(sympy.symbols("a b c d e")))
-    vw = VariableWeights([(lambda x: 5 * x, Operation.SYMBOL), (lambda x: max(1, 2 - x), Operation.EQUALS),
-                          (lambda x: max(1, 3 - x), Operation.IMPLIES), (lambda x: max(1, 5 - x), Operation.OR),
-                          (lambda x: max(1, 4 - x), Operation.AND), (lambda x: 1, Operation.NOT)])
-    rand = random.Random()
-    factory = RandomExpressionFactory(vw, rand, scope)
-    testCase = generateVariationalList(8, lambda: random.randint(1, 5), factory)
-    print(testCase)
-    symbolWeights = SymbolWeights(5, scope)
-    fmTruth = factory.newExpression(symbolWeights)
-    print(fmTruth)
-    fm = FeatureModel(fmTruth)
-    productLine = fm.applyModelToList(testCase)
-    print(productLine)
-    nodup = productLine.filterNoDuplicates()
-    srted = productLine.filterSorted()
-    print(nodup)
-    print(srted)
-    print(productLine.getAverageLength())
-    print(nodup.getAverageLength())
-    print(srted.getAverageLength())
-    print(productLine.getAverageWeight())
-    print(nodup.getAverageWeight())
-    print(srted.getAverageWeight())
+    config = json.loads(open("annotations.json").read())
+    scope = Scope(list(sympy.symbols(' '.join(config['vars']))))
+    annotations = list(map(lambda x: Expression.deserialize(x, scope), config["annotations"]))
+    print(*generateVariationalList(20, set(range(20)), [2, 2, 3], [3, 2, 4], annotations), sep='\n')
