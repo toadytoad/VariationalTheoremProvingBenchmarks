@@ -8,7 +8,6 @@ import json
 
 import pyapproxmc
 import sympy
-from bitarray import bitarray
 
 
 class Scope:
@@ -46,8 +45,6 @@ class Operation(Enum):
 operationStrs = [None, "~", "&", "|", "=="]
 operationFuncs = [None, lambda x: not x, lambda *x: reduce(lambda i, j: i & j, x, True),
                   lambda *x: reduce(lambda i, j: i | j, x, False), lambda x, y: x == y]
-truthTableFuncs = [None, lambda x: ~x, lambda x, size: reduce(lambda i, j: i & j, x, ~bitarray(size)),
-                   lambda x, size: reduce(lambda i, j: i | j, x, bitarray(size)), lambda x, y: ~(x ^ y)]
 
 
 class Expression:
@@ -99,16 +96,6 @@ class Expression:
         return operationFuncs[self.op.value](*map(lambda x: x.applySubstitution(substitution), self.children))
         # kinda unsafe in terms of arguments, but it should
         # be fine because of the assertions in __init__
-
-    def getTruthTable(self):
-        if self.op == Operation.SYMBOL:
-            return self.scope.truthTables[self.scope.inverse[self.children[0]]]
-        if self.op == Operation.NOT:
-            return ~self.children[0].getTruthTable()
-        if self.op == Operation.EQUALS:
-            return truthTableFuncs[self.op.value](*map(lambda x: x.getTruthTable(), self.children))
-        return truthTableFuncs[self.op.value](map(lambda x: x.getTruthTable(), self.children),
-                                              1 << len(self.scope.variables))
 
     def __str__(self):
         return repr(self)
@@ -169,11 +156,8 @@ class FeatureModel:
             mx = max(mx, max(map(abs, i)))
         c = pyapproxmc.Counter()
         c.add_clauses(clauses)
-        count = c.count()
+        count = c.count(None)
         self.weight = count[0] * 2 ** (count[1] + len(expr.scope) - mx)
-
-    def applyModelToList(self, lst: "VariationalList"):
-        raise NotImplementedError
 
     def __repr__(self):
         return repr(self.expr)
@@ -299,7 +283,7 @@ class CNF:
             mx = max(mx, max(map(abs, i)))
         c = pyapproxmc.Counter()
         c.add_clauses(clauses)
-        count = c.count()
+        count = c.count(None)
         weight = count[0] * 2 ** (count[1] + len(self.scope) - mx)
         return weight
 
@@ -372,10 +356,10 @@ class RandomExpressionFactory:
         elif op == Operation.EQUALS:
             return Expression(op, [self.newExpression(sw, depth + 1), self.newExpression(sw, depth + 1)], self.scope)
         elif op == Operation.AND:
-            return Expression(op, [self.newExpression(sw, depth + 1) for z in range(self.andWeights[self.rand])],
+            return Expression(op, [self.newExpression(sw, depth + 1) for _ in range(self.andWeights[self.rand])],
                               self.scope)
         elif op == Operation.OR:
-            return Expression(op, [self.newExpression(sw, depth + 1) for z in range(self.orWeights[self.rand])],
+            return Expression(op, [self.newExpression(sw, depth + 1) for _ in range(self.orWeights[self.rand])],
                               self.scope)
 
 depthFactor = 1.3
@@ -399,7 +383,7 @@ factories = [lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: d
                                                                     (lambda x: (2 if x % 2 else 0), Operation.AND)]),
                                                    random, scope, WeightsCollection([(10, 2)]),
                                                    WeightsCollection([(10, 2), (3, 3)])),
-             lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: depthFactor * (3) * x, Operation.SYMBOL),
+             lambda scope: RandomExpressionFactory(VariableWeights([(lambda x: depthFactor * 3 * x, Operation.SYMBOL),
                                                                     (lambda x: (0 if x % 2 else 3), Operation.OR),
                                                                     (lambda x: (3 if x % 2 else 0), Operation.AND)]),
                                                    random, scope, WeightsCollection([(9, 2), (0.8, 3), (0.2, 4)]),
@@ -422,7 +406,7 @@ def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx:
     while len(annotations) < n:
         filtered += 1
         expr = factory.newExpression(SymbolWeights(10, scope))
-        weight = (expr & fm.expr).toCNF().getWeight() / (fm.weight)
+        weight = (expr & fm.expr).toCNF().getWeight() / fm.weight
         if weight < mn or weight > mx:
             continue
         if mean[0] <= avg <= mean[1] and mean[0] <= (avg * len(annotations) + weight) / (len(annotations) + 1) <= mean[1]:
@@ -480,11 +464,8 @@ if __name__ == '__main__':
         print("Loaded feature model and scope")
         annotations = generateAnnotations(scope, fm, args['n'], args['min'], args['max'], args['mean'])
         print("Generated")
-        out.write(json.dumps(
-            {'fm': fm.expr.serialize(),
-             "annotations": list(map(lambda x: x.serialize(), annotations)),
-             "n": args['n'],
-             "vars": list(map(str, scope.variables))}))
+        args["annotations"] = list(map(lambda x: x.serialize(), annotations))
+        out.write(json.dumps(args))
         out.close()
     elif command == 'featuremodel':
         for var in args['vars']:
@@ -493,5 +474,6 @@ if __name__ == '__main__':
                 exit(1)
         scope = Scope(list(sympy.symbols(' '.join(args['vars']))))
         fm = FeatureModel(factories[2](scope).newExpression(SymbolWeights(10, scope)))
-        out.write(json.dumps({"fm": fm.expr.serialize(), "vars": list(map(str, scope.variables))}))
+        args['fm'] = fm.expr.serialize()
+        out.write(json.dumps(args))
         out.close()

@@ -1,52 +1,11 @@
 from typing import *
 import json
+import argparse
 
 import sympy
-from bitarray import *
 import random
 
-from symbolic import Expression, Scope, RandomExpressionFactory, VariableWeights, Operation, SymbolWeights, FeatureModel
-
-
-# "configurations" here are just bitmask representations of the truth of variables. e.g. bit 0 could correspond to "A".
-
-class TruthTable:
-    def __init__(self, nVars: int, table):
-        self.n = nVars
-        if table is None:
-            self.table = bitarray(1 << nVars)
-        else:
-            self.table = table
-            assert len(table) == (1 << nVars)
-
-    def populateTable(self, percentTruth: float):
-        r = random
-        for i in range(len(self.table)):
-            if r.random() < percentTruth:  # populates each configuration with a percentTruth chance of being true
-                self.table[i] = 1
-
-    # or and and are basic operations that allow for a quick calculation of configurations with duplicates by taking the
-    # disjunction of pairwise ands for identical values
-
-    def __or__(self, other):
-        assert other.n == self.n
-        return TruthTable(self.n, other.table | self.table)
-
-    def __and__(self, other):
-        assert other.n == self.n
-        return TruthTable(self.n, other.table & self.table)
-
-    def __getitem__(self, item):
-        return self.table[item]
-
-    def __len__(self):
-        return 1 << self.n
-
-    def __repr__(self):
-        return repr(self.table)
-
-
-# really just a tuple with the ability to access the truth of the item given a configuration
+from symbolic import Expression, Scope, FeatureModel
 
 class VariationalElement:
     def __init__(self, val: int, variation: Expression):
@@ -56,6 +15,12 @@ class VariationalElement:
 
     def __repr__(self):
         return "(" + str(self.val) + ", " + repr(self.var) + ")"
+
+    def __str__(self):
+        return self.__repr__()
+
+    def encode(self):
+        return [self.val, str(self.var)]
 
 
 
@@ -159,7 +124,17 @@ def generateVariationalList(listSize: int, elements:Set,elementRepetitions:List[
 
 
 if __name__ == "__main__":
-    config = json.loads(open("annotations.json").read())
+    parser = argparse.ArgumentParser(description='Generate a domain model')
+    parser.add_argument('input', type=argparse.FileType('r'))
+    parser.add_argument('output', type=argparse.FileType('w'))
+    args = parser.parse_args()
+    out = args.output
+    config = json.loads(args.input.read())
     scope = Scope(list(sympy.symbols(' '.join(config['vars']))))
     annotations = list(map(lambda x: Expression.deserialize(x, scope), config["annotations"]))
-    print(*generateVariationalList(20, set(range(20)), [2, 2, 3], [3, 2, 4], annotations), sep='\n')
+    size = config['size']
+    elementRepetitions = config['elementRepetitions']
+    contiguousSublists = config['contiguousSublists']
+    res = generateVariationalList(size, set(range(size)), elementRepetitions, contiguousSublists, annotations)
+    config['model'] = list(map(VariationalElement.encode, res))
+    out.write(json.dumps(config))
