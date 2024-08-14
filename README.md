@@ -50,7 +50,7 @@ The command to use to generate a domain model is:
 python ./lists.py input.json output.json
 ```
 
-`input.json` should contain but is not limited to the following vairables:
+`input.json` should contain but is not limited to the following variables:
 
 `vars`: variables used to define the scope of the data.
 
