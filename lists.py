@@ -126,10 +126,14 @@ def generateVariationalList(listSize: int, elements:Set,elementRepetitions:List[
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate a domain model')
     parser.add_argument('input', type=argparse.FileType('r'))
-    parser.add_argument('output', type=argparse.FileType('w'))
+    parser.add_argument('output', type=str)
     args = parser.parse_args()
-    out = args.output
+
     config = json.loads(args.input.read())
+    for var in config['vars']:
+        if any(i in var for i in ' &|~(),'):
+            print("Invalid variable name: " + var)
+            exit(1)
     scope = Scope(list(sympy.symbols(' '.join(config['vars']))))
     annotations = list(map(lambda x: Expression.deserialize(x, scope), config["annotations"]))
     size = config['size']
@@ -137,4 +141,6 @@ if __name__ == "__main__":
     contiguousSublists = config['contiguousSublists']
     res = generateVariationalList(size, set(range(size)), elementRepetitions, contiguousSublists, annotations)
     config['model'] = list(map(VariationalElement.encode, res))
+    out = open(args.output, 'r')
     out.write(json.dumps(config))
+    out.close()

@@ -8,7 +8,7 @@ import json
 
 import pyapproxmc
 import sympy
-
+from z3 import *
 
 class Scope:
     def __init__(self, v: List[sympy.Symbol]):
@@ -66,6 +66,12 @@ class Expression:
         for var in scope.variables:
             globs[str(var)] = Expression(Operation.SYMBOL, [var], scope)
         return eval(ser, globs, {})
+    def toZ3Expression(self):
+        s = self.serialize()
+        globs = {}
+        for var in self.scope.variables:
+            globs[str(var)] = Bool(str(var))
+        return eval(s, globs, {})
     def serialize(self):
         if self.op == Operation.SYMBOL:
             return str(self.children[0])
@@ -156,8 +162,49 @@ class FeatureModel:
             mx = max(mx, max(map(abs, i)))
         c = pyapproxmc.Counter()
         c.add_clauses(clauses)
-        count = c.count(None)
+        count = c.count()
         self.weight = count[0] * 2 ** (count[1] + len(expr.scope) - mx)
+        self.configs = None
+    @staticmethod
+    def getBaseModels(s: z3.Solver):
+        sats = s.check()
+        while sats==sat:
+            m = s.model()
+            s.add(Or([v()!=m[v] for v in m]))
+            sats = s.check()
+            yield m
+    @staticmethod
+    def partialSubstitutionFiller(partialsub):
+        for i in range(len(partialsub)):
+            if partialsub[i] is None:
+                t = partialsub.copy()
+                t[i] = True
+                for s in FeatureModel.partialSubstitutionFiller(t):
+                    yield s
+                f = partialsub.copy()
+                f[i] = False
+                for s in FeatureModel.partialSubstitutionFiller(f):
+                    yield s
+                break
+        else:
+            #no unfilled gaps found
+            yield partialsub
+    def genConfigurations(self):
+        if self.configs is not None:
+            return self.configs
+        configs = []
+        s = Solver()
+        s.add(self.expr.toZ3Expression())
+        for model in self.getBaseModels(s):
+            partialsub = [None]*len(self.expr.scope)
+            for v in model:
+                partialsub[self.expr.scope.inverse[sympy.symbols(str(v))]] = bool(model[v])
+            for s in self.partialSubstitutionFiller(partialsub):
+                configs.append(Substitution({self.expr.scope.variables[i]:s[i] for i in range(len(s))}, self.expr.scope))
+        self.configs = configs
+
+
+
 
     def __repr__(self):
         return repr(self.expr)
@@ -283,7 +330,7 @@ class CNF:
             mx = max(mx, max(map(abs, i)))
         c = pyapproxmc.Counter()
         c.add_clauses(clauses)
-        count = c.count(None)
+        count = c.count()
         weight = count[0] * 2 ** (count[1] + len(self.scope) - mx)
         return weight
 
@@ -449,31 +496,32 @@ if __name__ == '__main__':
     # parser.add_argument('vars', nargs='*', help='variables')
     parser.add_argument('command', choices=['annotations', 'featuremodel'])
     parser.add_argument('input', type=argparse.FileType('r'))
-    parser.add_argument('output', type=argparse.FileType('w'))
+    parser.add_argument('output', type=str)
     args = parser.parse_args()
     command = args.command
-    out = args.output
-    args = json.loads(args.input.read())
+
+    config = json.loads(args.input.read())
+    out = open(args.output, 'w')
     if command == 'annotations':
-        for var in args['vars']:
-            if any(i in var for i in ' &|~()'):
+        for var in config['vars']:
+            if any(i in var for i in ' &|~(),'):
                 print("Invalid variable name: " + var)
                 exit(1)
-        scope = Scope(list(sympy.symbols(' '.join(args['vars']))))
-        fm = FeatureModel(Expression.deserialize(args['fm'], scope))
+        scope = Scope(list(sympy.symbols(' '.join(config['vars']))))
+        fm = FeatureModel(Expression.deserialize(config['fm'], scope))
         print("Loaded feature model and scope")
-        annotations = generateAnnotations(scope, fm, args['n'], args['min'], args['max'], args['mean'])
+        annotations = generateAnnotations(scope, fm, config['n'], config['min'], config['max'], config['mean'])
         print("Generated")
-        args["annotations"] = list(map(lambda x: x.serialize(), annotations))
-        out.write(json.dumps(args))
+        config["annotations"] = list(map(lambda x: x.serialize(), annotations))
+        out.write(json.dumps(config))
         out.close()
     elif command == 'featuremodel':
-        for var in args['vars']:
+        for var in config['vars']:
             if any(i in var for i in ' &|~()'):
                 print("Invalid variable name: " + var)
                 exit(1)
-        scope = Scope(list(sympy.symbols(' '.join(args['vars']))))
+        scope = Scope(list(sympy.symbols(' '.join(config['vars']))))
         fm = FeatureModel(factories[2](scope).newExpression(SymbolWeights(10, scope)))
-        args['fm'] = fm.expr.serialize()
-        out.write(json.dumps(args))
+        config['fm'] = fm.expr.serialize()
+        out.write(json.dumps(config))
         out.close()
