@@ -5,7 +5,7 @@ Any execution will only add to information provided, meaning that any config tha
 
 ## Requirements
 The following python libraries are required:
-[`sympy`](https://www.sympy.org/en/index.html) and [`pyapproxmc`](https://pypi.org/project/pyapproxmc/)
+[`sympy`](https://www.sympy.org/en/index.html), [`z3-solver`](https://pypi.org/project/z3-solver/) and [`pyapproxmc`](https://pypi.org/project/pyapproxmc/)
 
 ## Generating a Feature Model
 To generate a feature model use the following command:
