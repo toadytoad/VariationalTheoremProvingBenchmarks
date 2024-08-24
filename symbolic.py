@@ -11,6 +11,9 @@ import sympy
 from z3 import *
 
 class Scope:
+    """
+    A scope is used to define the variables used in generating problems.
+    """
     def __init__(self, v: List[sympy.Symbol]):
         self.variables = v
         self.inverse = {v[i]: i for i in range(len(v))}
@@ -23,6 +26,10 @@ class Scope:
 
 
 class Substitution:
+    """
+    A substitution maps variables to their truth values,
+    these are used to evaluate variational types given configurations.
+    """
     def __init__(self, sub: Dict[sympy.Symbol, bool], scope: Scope):
         for i in sub:
             assert i in scope.variables
@@ -48,6 +55,11 @@ operationFuncs = [None, lambda x: not x, lambda *x: reduce(lambda i, j: i & j, x
 
 
 class Expression:
+    """
+    This class represents any type of boolean expression that is used.
+    It offers many useful methods such as conversion to CNF (used for model counting),
+    conversion to z3 expressions for solving sharp-sat problems, and serialization.
+    """
     def __init__(self, op, children: List[sympy.Symbol or "Expression"], scope: Scope):
         if op == Operation.SYMBOL:
             assert len(children) == 1
@@ -65,6 +77,7 @@ class Expression:
         globs = {}
         for var in scope.variables:
             globs[str(var)] = Expression(Operation.SYMBOL, [var], scope)
+        # No other global types are offered so there shouldn't be any injection vulnerabilities
         return eval(ser, globs, {})
     def toZ3Expression(self):
         s = self.serialize()
@@ -96,17 +109,26 @@ class Expression:
         else:
             return "(" + operationStrs[self.op.value].join(map(str, self.children)) + ")"
 
-    def applySubstitution(self, substitution: Substitution):
+    def applySubstitution(self, substitution: Substitution) -> bool:
+        """
+        Recursively applies a given substitution to an entire expression.
+        :param substitution:
+        :return: The truth value of this expression under the given configuration.
+        """
         if self.op == Operation.SYMBOL:
             return substitution.sub[self.children[0]]
         return operationFuncs[self.op.value](*map(lambda x: x.applySubstitution(substitution), self.children))
-        # kinda unsafe in terms of arguments, but it should
-        # be fine because of the assertions in __init__
 
     def __str__(self):
         return repr(self)
 
     def __or__(self, other: "Expression"):
+        """
+        Combines two expression by an OR operation.
+        If either of self or other is an OR type operation, then the children are simplpy combined.
+        :param other:
+        :return:
+        """
         assert self.scope == other.scope
         if self.op==Operation.OR and other.op == Operation.OR:
             return Expression(Operation.OR, self.children+other.children, self.scope)
@@ -117,6 +139,12 @@ class Expression:
         return Expression(Operation.OR, [self, other], self.scope)
 
     def __and__(self, other: "Expression"):
+        """
+        Combines two expression by an AND operation.
+        If either of self or other is an AND type operation, then the children are simply combined.
+        :param other:
+        :return:
+        """
         assert self.scope == other.scope
         if self.op==Operation.AND and other.op == Operation.AND:
             return Expression(Operation.AND, self.children+other.children, self.scope)
@@ -134,6 +162,11 @@ class Expression:
         return Expression(Operation.EQUALS, [self, other], self.scope)
 
     def toCNF(self):
+        """
+        Converts this expression to a CNF expression.
+        This is done through the use of distributive properties and DeMorgan's law.
+        :return:
+        """
         if self.op == Operation.SYMBOL:
             return CNF([CNFTerm([Atom(self.children[0], False, self.scope)], self.scope)], self.scope)
         elif self.op == Operation.NOT:
@@ -153,6 +186,10 @@ class Expression:
 
 
 class FeatureModel:
+    """
+    This represents a feature model, which is used to describe a product line.
+    Feature models offer sharp-sat solving using z3, in order to be able to list all configurations.
+    """
     def __init__(self, expr: Expression):
         self.expr = expr
         self.cnf = expr.toCNF()
@@ -167,6 +204,13 @@ class FeatureModel:
         self.configs = None
     @staticmethod
     def getBaseModels(s: z3.Solver):
+        """
+        Creates an iterable object of all models to the feature model expression.
+        This is done by querying a z3 solver, and each time telling the solver that the
+        last model is unsatisfiable, then querying it again until the overall problem is unsat.
+        :param s:
+        :return:
+        """
         sats = s.check()
         while sats==sat:
             m = s.model()
@@ -175,6 +219,16 @@ class FeatureModel:
             yield m
     @staticmethod
     def partialSubstitutionFiller(partialsub):
+        """
+        The solutions output by z3 don't always have assignments for all variables.
+        This means that the other variables can be assigned to whatever.
+        For example a scope of a, b, and c with feature model a|b has 6 solutions,
+        but z3 will only give 2 (something like [a=True] and [a=False, b=True]).
+        So this function generates all the complete configurations with the model that
+        z3 outputs.
+        :param partialsub:
+        :return:
+        """
         for i in range(len(partialsub)):
             if partialsub[i] is None:
                 t = partialsub.copy()
@@ -190,6 +244,11 @@ class FeatureModel:
             #no unfilled gaps found
             yield partialsub
     def genConfigurations(self):
+        """
+        This generates all the configurations of the feature model so that they can be used
+        to generate product lines.
+        :return:
+        """
         if self.configs is not None:
             return self.configs
         configs = []
@@ -214,6 +273,10 @@ class FeatureModel:
 
 
 class Atom:
+    """
+    Describes a single variable and if it is negated.
+    Used for creating CNF expressions.
+    """
     def __init__(self, symbol: sympy.Symbol, negation: bool, scope: Scope):
         assert symbol in scope.variables
         self.symbol = symbol
@@ -234,16 +297,33 @@ class Atom:
 
 
 class CNFTerm:
+    """
+    A single term of a CNF expression.
+    This is the disjunction of several atoms.
+    """
     def __init__(self, atoms: List[Atom], scope: Scope):
         self.atoms = atoms
         assert all(atoms[i].scope is scope for i in range(len(atoms)))
         self.scope = scope
 
     def __or__(self, other: "CNFTerm"):
+        """
+        The OR operation for two CNF terms.
+        Combines their atoms and simplifies accordingly.
+        :param other:
+        :return:
+        """
         assert self.scope is other.scope
         return CNFTerm(self.atoms + other.atoms, self.scope).simplify()
 
     def simplify(self):
+        """
+        Simplifies this CNF term.
+        If an atom and its negation are both present, then the entire CNF term is simply true,
+        denoted by a CNF term with no atoms.
+        Any repeated atoms are also removed.
+        :return:
+        """
         i = 0
         while i < len(self.atoms) - 1:
             j = i + 1
@@ -260,6 +340,12 @@ class CNFTerm:
         return self
 
     def __le__(self, other: "CNFTerm"):
+        """
+        Defines whether this CNF term absorbs the other.
+        For example the terms (a|b)&(a|b|c) Should simplify to a|b, since a and b are contained in a|b|c.
+        :param other:
+        :return:
+        """
         return all(i in other.atoms for i in self.atoms)
 
     def __repr__(self):
@@ -272,33 +358,63 @@ class CNFTerm:
         return self.__repr__()
 
     def toClause(self):
+        """
+        Encodes this CNF term into a clause used for model counting in pyapproxmc.
+        Assigns a positive or negative integer to each atom depending on the scopes
+        encoding and its negation.
+        :return:
+        """
         return [(-(self.scope.inverse[i.symbol] + 1)) if i.negation else self.scope.inverse[i.symbol] + 1 for i in
                 self.atoms]
 
 
 class CNF:
+    """
+    A CNF expression.
+    Used for model counting and generating full CNF expressions from regular expressions.
+    """
     def __init__(self, terms: List[CNFTerm], scope: Scope):
         self.terms = terms
         assert all(terms[i].scope is scope for i in range(len(terms)))
         self.scope = scope
 
     def __and__(self, other: "CNF"):
+        """
+        Ands two CNF expression together by combining their children and simplifying.
+        :param other:
+        :return:
+        """
         assert other.scope is self.scope
-        return CNF(self.terms + other.terms, self.scope)
+        return CNF(self.terms + other.terms, self.scope).simplify()
 
     def __or__(self, other: "CNF"):
+        """
+        Performs an OR operation by distributing and cross multiplying the CNF terms.
+        :param other:
+        :return:
+        """
         assert other.scope is self.scope
         other.simplify()
         self.simplify()
         return CNF([i | j for i, j in itertools.product(self.terms, other.terms)], self.scope).simplify()
 
     def __invert__(self):
+        """
+        Uses DeMorgan's law to invert the expression.
+        :return:
+        """
         start = ~self.terms[0]
         for i in range(1, len(self.terms)):
             start |= ~self.terms[i]
         return start
 
     def simplify(self):
+        """
+        Simplifies the CNF expression.
+        Any terms that need to be absorbed by another are absorbed.
+        All terms are simplified themselves, and anything that evaluates to True is removed.
+        :return:
+        """
         for t in self.terms:
             t.simplify()
         self.terms = [t for t in self.terms if len(t.atoms)]
@@ -324,6 +440,10 @@ class CNF:
         return self.__repr__()
 
     def getWeight(self):
+        """
+        Invokes pyapproxmc to get the weight of this CNF expression.
+        :return:
+        """
         clauses = [i.toClause() for i in self.terms]
         mx = 0
         for i in clauses:
@@ -336,6 +456,9 @@ class CNF:
 
 
 class WeightsCollection:
+    """
+    A list of weighted objects to randomly select from.
+    """
     def __init__(self, weights: List[Tuple[float, object]]):
         self.weights = weights
         self.sum = sum(weights[i][0] for i in range(len(weights)))
@@ -351,6 +474,10 @@ class WeightsCollection:
 
 
 class VariableWeights:
+    """
+    Defines a function which determines the weight of various objects based on a parameter.
+    Used for changing the probabilities of each type of expression being continued depending on the depth in the tree.
+    """
     def __init__(self, weights: List[Tuple[Callable[[int], float], Operation]]):
         self.cache = {}
         self.weights = weights
@@ -363,6 +490,10 @@ class VariableWeights:
 
 
 class SymbolWeights:
+    """
+    Gives an interface for getting random symbols for expression generation.
+    Once a variable is given, its probability is divided by a factor to prevent frequent repeated symbols.
+    """
     def __init__(self, factor: float, scope: Scope):
         self.scope = scope
         self.weights = [1] * len(self.scope)
@@ -380,6 +511,9 @@ class SymbolWeights:
 
 
 class RandomExpressionFactory:
+    """
+    This factory generates random expressions given variable weights and several other configurations.
+    """
     def __init__(self, weights: VariableWeights, rand: random.Random, scope: Scope, andWeights: WeightsCollection,
                  orWeights: WeightsCollection):
         self.weights = weights
@@ -391,6 +525,7 @@ class RandomExpressionFactory:
     def newExpression(self, sw: SymbolWeights, depth=0) -> Expression:
         weight = self.weights[depth]
         op = weight[self.rand]
+        # Depending on operation generate any additional nodes recursively.
         if op == Operation.SYMBOL:
             negate = self.rand.getrandbits(1)
             if negate:
@@ -469,31 +604,8 @@ def generateAnnotations(scope: Scope, fm: "FeatureModel", n: int, mn: float, mx:
     print("Filtered {} annotations".format(filtered))
     return annotations
 
-
-'''
-if __name__ == '__main__':
-    rand = random.Random()
-    start = 3
-    end = 1
-    plt.hsv()
-    scope = Scope(list(sympy.symbols(' '.join(string.ascii_uppercase[:8]))))
-    fm = FeatureModel(factories[2](scope).newExpression(SymbolWeights(10, scope)))
-    print(fm.weight)
-    annotations = generateAnnotations(scope, fm, 20, 0.1, 0.5, (0.32, 0.34))
-    for i in annotations:
-        cnf = i.toCNF()
-        print(i, cnf, (cnf & fm.expr.toCNF()).getWeight() / fm.weight)
-'''
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate annotations under a given feature model')
-    # parser.add_argument('--n', dest='n', type=int, help='number of annotations to generate')
-    # parser.add_argument('--min', dest='mn', type=float, help='minimum weight of annotation under feature model')
-    # parser.add_argument('--max', dest='mx', type=float, help='maximum weight of annotation under feature model')
-    # parser.add_argument('--meanlo', dest='meanlo', type=float, help='lower bound on mean of weights')
-    # parser.add_argument('--meanhi', dest='meanhi', type=float, help='upper bound on mean of weights')
-    # parser.add_argument('--featuremodel', '--fm', dest='fm', type=str, help='feature model')
-    # parser.add_argument('vars', nargs='*', help='variables')
     parser.add_argument('command', choices=['annotations', 'featuremodel'])
     parser.add_argument('input', type=argparse.FileType('r'))
     parser.add_argument('output', type=str)
