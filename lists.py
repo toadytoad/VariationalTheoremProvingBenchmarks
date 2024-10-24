@@ -2,6 +2,7 @@ from typing import *
 import json
 import argparse
 
+import pyapproxmc
 import sympy
 import random
 
@@ -15,7 +16,8 @@ class VariationalElement:
     def __init__(self, val: int, variation: Expression):
         self.val = val
         self.var = variation
-
+        self.fmcache = None
+        self.weight = None
 
     def __repr__(self):
         return "(" + str(self.val) + ", " + repr(self.var) + ")"
@@ -28,6 +30,22 @@ class VariationalElement:
 
     def applySubstitution(self, configuration):
         return self.var.applySubstitution(configuration)
+    def deg(self, fm:FeatureModel):
+        assert self.var.scope is fm.expr.scope
+        if self.fmcache is None:
+            self.fmcache=fm
+        elif self.fmcache==fm:
+            return self.weight
+        cnf = (self.var&fm.expr).toCNF()
+        clauses = [i.toClause() for i in cnf.terms]
+        mx = 0
+        for i in clauses:
+            mx = max(mx, max(map(abs, i)))
+        c = pyapproxmc.Counter()
+        c.add_clauses(clauses)
+        count = c.count()
+        self.weight = count[0] * 2 ** (count[1] + len(self.var.scope) - mx)/fm.weight
+        return self.weight 
 
 
 
